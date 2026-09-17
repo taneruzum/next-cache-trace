@@ -1,0 +1,51 @@
+{
+  "name": "next-cache-trace",
+  "version": "0.1.0",
+  "repository": { "type": "git", "url": "git+https://github.com/taneruzum/next-cache-trace.git" },
+  "homepage": "https://github.com/taneruzum/next-cache-trace#readme",
+  "bugs": { "url": "https://github.com/taneruzum/next-cache-trace/issues" },
+  "description": "Static cache-correctness analysis for Next.js App Router projects.",
+  "type": "module",
+  "bin": {
+    "next-cache-trace": "./bin/next-cache-trace.js"
+  },
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./eslint": { "types": "./dist/eslint.d.ts", "import": "./dist/eslint.js" }
+  },
+  "files": [
+    "bin",
+    "dist",
+    "docs",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "pretest": "npm run build",
+    "test": "node scripts/test.mjs",
+    "audit": "node ./bin/next-cache-trace.js audit",
+    "verify": "npm test && npm run test:pack && npm pack --dry-run && npm pack --workspace eslint-plugin-next-cache-trace --dry-run",
+    "test:pack": "node scripts/pack-smoke.mjs",
+    "prepack": "npm run build"
+  },
+  "workspaces": ["packages/eslint-plugin"],
+  "dependencies": { "typescript": "~5.9.3", "picomatch": "^4.0.3" },
+  "devDependencies": { "@types/node": "^22.0.0", "@types/picomatch": "^4.0.0", "eslint": "^10.10.0", "typescript-eslint": "^8.70.0" },
+  "keywords": [
+    "nextjs",
+    "next-js",
+    "cache",
+    "static-analysis",
+    "lint",
+    "app-router"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

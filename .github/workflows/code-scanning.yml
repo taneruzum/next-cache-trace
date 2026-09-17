@@ -1,0 +1,23 @@
+name: Cache graph code scanning
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: node bin/next-cache-trace.js audit examples/next16-cache-risks --format sarif --output artifacts/cache.sarif --fail-on none
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: artifacts/cache.sarif
+          category: next-cache-trace

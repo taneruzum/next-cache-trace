@@ -1,0 +1,14 @@
+node_modules/
+# Local planning notes refer to unrelated private projects.
+/PLAN.md
+coverage/
+*.sarif
+cache-report.html
+example-report.html
+dist/
+artifacts/
+*.tgz
+.npm-cache/
+examples/**/.next/
+examples/**/next-env.d.ts
+examples/**/*.tsbuildinfo

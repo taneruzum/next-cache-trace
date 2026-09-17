@@ -1,0 +1,8 @@
+{
+  "name": "next-cache-trace-demo",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": { "dev": "next dev", "build": "next build", "start": "next start" },
+  "dependencies": { "next": "16.3.5", "react": "19.3.0", "react-dom": "19.3.0" },
+  "devDependencies": { "typescript": "~5.9.3", "@types/node": "^22", "@types/react": "^19", "@types/react-dom": "^19" }
+}
