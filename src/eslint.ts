@@ -17,21 +17,22 @@ function diagnostics(context: Rule.RuleContext): Finding[] {
     const filename = isAbsolute(context.filename) ? context.filename : resolve(context.cwd, context.filename);
     const file = relative(root, filename).replaceAll('\\', '/');
     if (file.startsWith('../') || isAbsolute(file)) return [];
-    const options: TraceOptions = {};
+    // Collect the advisory too; ESLint's rule switch controls whether it is shown.
+    const options: TraceOptions = { rules: { NCT009: 'info' } };
     if (settings.cacheComponents !== undefined) options.cacheComponents = settings.cacheComponents;
     if (settings.config) options.config = settings.config;
     findings = analyzeProjectSync(root, options, { [file]: text }).findings.filter(f => f.file === file);
   } else {
     const file = /\.[cm]?[jt]sx?$/.test(context.filename) ? context.filename : 'input.tsx';
     const analysis = analyzeSource(file, text);
-    findings = buildReport('', [analysis], new Map([[file, text]]), { enabled: settings.cacheComponents ?? null, file: null, reason: 'ESLint settings' }, {}, false).findings;
+    findings = buildReport('', [analysis], new Map([[file, text]]), { enabled: settings.cacheComponents ?? null, file: null, reason: 'ESLint settings' }, { rules: { NCT009: 'info' } }, false).findings;
   }
   reports.set(source, findings);
   return findings;
 }
 const rules: Record<string, Rule.RuleModule> = {};
 for (const code of Object.keys(RULES) as RuleCode[]) rules[code] = {
-  meta: { type: code === 'NCT005' || code === 'NCT003' ? 'suggestion' : 'problem', docs: { description: RULES[code].title }, schema: [], messages: { finding: '{{message}}' } },
+  meta: { type: code === 'NCT005' || code === 'NCT003' || code === 'NCT009' ? 'suggestion' : 'problem', docs: { description: RULES[code].title }, schema: [], messages: { finding: '{{message}}' } },
   create(context) {
     return { 'Program:exit'() {
       for (const item of diagnostics(context)) if (item.code === code) context.report({ loc: { line: item.line, column: item.column - 1 }, messageId: 'finding', data: { message: item.message } });
@@ -40,7 +41,7 @@ for (const code of Object.keys(RULES) as RuleCode[]) rules[code] = {
 }
 const plugin: ESLint.Plugin = { meta: { name: 'eslint-plugin-next-cache-trace', version: '0.1.0' }, rules, configs: {} };
 plugin.configs = {
-  recommended: { plugins: { 'next-cache-trace': plugin }, rules: { 'next-cache-trace/NCT002': 'error', 'next-cache-trace/NCT005': 'warn', 'next-cache-trace/NCT900': 'warn' } },
-  project: { plugins: { 'next-cache-trace': plugin }, rules: Object.fromEntries(Object.entries(RULES).map(([code, rule]) => ['next-cache-trace/' + code, rule.severity === 'error' ? 'error' : 'warn'])) }
+  recommended: { plugins: { 'next-cache-trace': plugin }, rules: { 'next-cache-trace/NCT002': 'error', 'next-cache-trace/NCT005': 'warn', 'next-cache-trace/NCT006': 'warn', 'next-cache-trace/NCT007': 'warn', 'next-cache-trace/NCT008': 'warn', 'next-cache-trace/NCT900': 'warn' } },
+  project: { plugins: { 'next-cache-trace': plugin }, rules: Object.fromEntries(Object.entries(RULES).map(([code, rule]) => ['next-cache-trace/' + code, rule.optIn ? 'off' : rule.severity === 'error' ? 'error' : 'warn'])) }
 };
 export default plugin;

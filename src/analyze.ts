@@ -4,7 +4,7 @@ import picomatch from 'picomatch';
 import ts from 'typescript';
 import { analyzeSource } from './ast.js';
 import { readCacheConfig, readOptions } from './config.js';
-import { finding, type CacheConfig, type FileAnalysis, type Finding, type Report, type TraceOptions } from './model.js';
+import { RULES, finding, type CacheConfig, type FileAnalysis, type Finding, type Report, type TraceOptions } from './model.js';
 
 const EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts']);
 const IGNORE_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'out', '.turbo', '.vercel', '__tests__', '__fixtures__']);
@@ -34,6 +34,20 @@ function suppressions(text: string): Map<number, Set<string>> {
   return map;
 }
 
+// Bounded, linear-time one-edit comparison (also accepts adjacent transposition).
+// Suggestions are review hints, never automatic fixes or inferred relationships.
+function nearTag(left: string, right: string): boolean {
+  if (!left || !right || left.length > 256 || right.length > 256) return false;
+  const a = left.toLowerCase(), b = right.toLowerCase();
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 4 || Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && a[i] === b[i]) i++;
+  if (a.length < b.length) return a.slice(i) === b.slice(i + 1);
+  if (a.length > b.length) return a.slice(i + 1) === b.slice(i);
+  return a.slice(i + 1) === b.slice(i + 1) || (a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2));
+}
+
 export function buildReport(root: string, files: FileAnalysis[], sources: Map<string, string>, config: CacheConfig, options: TraceOptions = {}, projectRules = true): Report {
   const producers = files.flatMap(f => f.producers);
   const invalidations = files.flatMap(f => f.invalidations);
@@ -46,7 +60,19 @@ export function buildReport(root: string, files: FileAnalysis[], sources: Map<st
   }
   if (projectRules) {
     const produced = new Set(producers.map(p => p.tag));
-    for (const item of invalidations) if (!produced.has(item.tag)) findings.push(finding('NCT001', item, item.method + '(' + JSON.stringify(item.tag) + ') has no observed literal producer in this scan. Dynamic/external producers may still exist.'));
+    const firstProducer = new Map<string, typeof producers[number]>();
+    for (const p of producers) if (!firstProducer.has(p.tag)) firstProducer.set(p.tag, p);
+    for (const item of invalidations) if (!produced.has(item.tag)) {
+      const candidates = [...firstProducer.keys()].filter(tag => nearTag(item.tag, tag)).sort((a, b) => {
+        const rank = (tag: string) => tag.toLowerCase() === item.tag.toLowerCase() ? 0 : 1;
+        return rank(a) - rank(b) || a.localeCompare(b);
+      }).slice(0, 3);
+      const hint = candidates.length ? ' Possible spelling/case matches: ' + candidates.map(tag => {
+        const site = firstProducer.get(tag)!;
+        return JSON.stringify(tag) + ' (' + site.file + ')';
+      }).join(', ') + '. Verify intent before changing the tag; tags are case-sensitive.' : '';
+      findings.push(finding('NCT001', item, item.method + '(' + JSON.stringify(item.tag) + ') has no observed literal producer in this scan. Dynamic/external producers may still exist.' + hint));
+    }
     const tags = new Map<string, typeof producers>();
     for (const p of producers) { const group = tags.get(p.tag) ?? []; group.push(p); tags.set(p.tag, group); }
     for (const [tag, items] of tags) {
@@ -59,6 +85,7 @@ export function buildReport(root: string, files: FileAnalysis[], sources: Map<st
   const visible: Finding[] = [];
   for (const item of findings) {
     const level = options.rules?.[item.code];
+    if (RULES[item.code].optIn && level === undefined) continue;
     if (level === 'off' || suppress.get(item.file)?.get(item.line)?.has(item.code)) { suppressedCount++; continue; }
     visible.push({ ...item, severity: level ?? item.severity });
   }

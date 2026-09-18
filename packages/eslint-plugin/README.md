@@ -7,4 +7,4 @@ import trace from 'eslint-plugin-next-cache-trace';
 export default [trace.configs.recommended];
 ```
 
-For TypeScript/TSX provide the typescript-eslint parser. `configs.project` enables NCT001–NCT005 and analysis diagnostics; set `settings['next-cache-trace'].projectRoot` to the app root for cross-file rules. `configs.recommended` runs only file-local checks. See the main package README for the complete configuration and static-analysis boundaries.
+For TypeScript/TSX provide the typescript-eslint parser. `configs.project` enables NCT001–NCT008 and analysis diagnostics; set `settings['next-cache-trace'].projectRoot` to the app root for cross-file rules. `configs.recommended` runs only file-local checks, including migration and tag-limit warnings. NCT009 (freshness-intent advice) is off in both presets; enable it explicitly only when wanted. See the main package README for the complete configuration and static-analysis boundaries.

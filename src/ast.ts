@@ -51,14 +51,16 @@ export function analyzeSource(file: string, text: string): FileAnalysis {
     }
     return undefined;
   }
-  function directive(statements: ts.NodeArray<ts.Statement>): ts.ExpressionStatement | undefined {
+  function directive(statements: ts.NodeArray<ts.Statement>, accepted = DIRECTIVES): ts.ExpressionStatement | undefined {
     for (const stmt of statements) {
       if (!ts.isExpressionStatement(stmt) || !ts.isStringLiteral(stmt.expression)) break;
-      if (DIRECTIVES.has(stmt.expression.text)) return stmt;
+      if (accepted.has(stmt.expression.text)) return stmt;
     }
     return undefined;
   }
   const fileDirective = directive(source.statements);
+  const serverDirectives = new Set(['use server']);
+  const fileServerDirective = directive(source.statements, serverDirectives);
   const exports = new Set<string>();
   for (const stmt of source.statements) if (ts.isExportDeclaration(stmt) && !stmt.moduleSpecifier && stmt.exportClause && ts.isNamedExports(stmt.exportClause)) for (const item of stmt.exportClause.elements) exports.add((item.propertyName ?? item.name).text);
   function isExported(fn: ts.FunctionLikeDeclaration): boolean {
@@ -80,9 +82,16 @@ export function analyzeSource(file: string, text: string): FileAnalysis {
   const unknown = (node: ts.Node, message: string) => result.findings.push(finding('NCT900', location(node), message));
   function addTags(args: readonly ts.Expression[], method: string, call: ts.CallExpression, scope: string, producer: boolean): void {
     if (!args.length) { unknown(call, method + ' has no statically readable tag arguments.'); return; }
+    // Only count fully known, valid-length literals. Spreads/variables may change
+    // cardinality and are covered by NCT900 instead of an invented exact count.
+    const literals = args.map(unwrap);
+    if (producer && literals.length > 128 && literals.every(value => (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) && value.text.length <= 256)) {
+      result.findings.push(finding('NCT008', location(call), method + ' supplies ' + literals.length + ' literal tags in one call/array; the supported limit is 128. Reduce the list and review affected invalidations.'));
+    }
     for (const arg of args) {
       const value = unwrap(arg);
       if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+        if (value.text.length > 256) result.findings.push(finding('NCT007', location(call), method + ' uses a literal tag of ' + value.text.length + ' UTF-16 code units; the supported limit is 256. This tag cannot be reliably assigned and invalidated.'));
         const site: TagSite = { ...location(call), tag: value.text, method, scope, area };
         (producer ? result.producers : result.invalidations).push(site);
       } else unknown(arg, method + ' uses a dynamic tag; no relationship is inferred.');
@@ -105,7 +114,7 @@ export function analyzeSource(file: string, text: string): FileAnalysis {
     if (tagArray && ts.isArrayLiteralExpression(unwrap(tagArray))) addTags((unwrap(tagArray) as ts.ArrayLiteralExpression).elements, method, call, scope, true);
     else if (tagArray || !ts.isObjectLiteralExpression(unwrap(options)) || (ts.isObjectLiteralExpression(unwrap(options)) && (unwrap(options) as ts.ObjectLiteralExpression).properties.some(p => ts.isSpreadAssignment(p)))) unknown(options, method + ' options cannot be fully resolved; they may contain tag producers.');
   }
-  function visit(node: ts.Node, boundary?: Boundary, scope = '<module>'): void {
+  function visit(node: ts.Node, boundary?: Boundary, scope = '<module>', serverAction = false): void {
     if (ts.isFunctionLike(node) && 'body' in node && node.body) {
       const fn = node as ts.FunctionLikeDeclaration;
       const body = fn.body!;
@@ -119,7 +128,8 @@ export function analyzeSource(file: string, text: string): FileAnalysis {
         result.usages.push(loc);
       }
       // Nested ordinary functions are not assumed to execute. No call-graph inference.
-      visit(body, current, functionName(fn));
+      const ownServer = ts.isBlock(body) && !!directive(body.statements, serverDirectives);
+      visit(body, current, functionName(fn), ownServer || (!!fileServerDirective && isExported(fn)));
       if (current && !current.explicitLifetime) result.findings.push(finding('NCT005', current, current.name + ' uses the default cache lifetime (no direct cacheLife call).'));
       return;
     }
@@ -127,6 +137,11 @@ export function analyzeSource(file: string, text: string): FileAnalysis {
       const method = apiName(node.expression, 'next/cache');
       if (method === 'cacheTag') { addTags(node.arguments, method, node, scope, true); result.usages.push(location(node)); }
       if (method === 'revalidateTag' || method === 'updateTag') addTags(node.arguments.slice(0, 1), method, node, scope, false);
+      if (method === 'revalidateTag') {
+        if (node.arguments.length === 1 && !ts.isSpreadElement(node.arguments[0])) result.findings.push(finding('NCT006', location(node), 'revalidateTag(tag) without a profile is deprecated in Next.js 16. Select an explicit invalidation policy; adding "max" changes immediate expiration to stale-while-revalidate.'));
+        const profile = node.arguments[1] && unwrap(node.arguments[1]);
+        if (serverAction && profile && (ts.isStringLiteral(profile) || ts.isNoSubstitutionTemplateLiteral(profile)) && profile.text === 'max') result.findings.push(finding('NCT009', location(node), 'Server Action ' + scope + ' uses revalidateTag(tag, "max"), which allows stale data while revalidating. If this action must immediately read its own write, consider updateTag; otherwise this usage is valid.'));
+      }
       if (method === 'cacheLife') { if (boundary) boundary.explicitLifetime = true; result.usages.push(location(node)); }
       if (method === 'unstable_cache') optionTags(node.arguments[2], node, method, scope);
       const expr = unwrap(node.expression);
@@ -139,7 +154,7 @@ export function analyzeSource(file: string, text: string): FileAnalysis {
       const request = apiName(node.expression, 'next/headers');
       if (boundary && boundary.directive !== 'use cache: private' && (request === 'cookies' || request === 'headers')) result.findings.push(finding('NCT002', location(node), request + '() is called directly inside ' + boundary.directive + ' function ' + boundary.name + '.'));
     }
-    ts.forEachChild(node, child => visit(child, boundary, scope));
+    ts.forEachChild(node, child => visit(child, boundary, scope, serverAction));
   }
   if (fileDirective) result.usages.push(location(fileDirective));
   visit(source);

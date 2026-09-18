@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.1.0 — Unreleased
+## 0.1.0 — 2026-09-19
+
+- Add Next.js 16 migration warnings for single-argument revalidateTag (NCT006).
+- Check literal tag length (NCT007) and fully known tag-list limits (NCT008).
+- Suggest nearby observed producer spellings/case for NCT001 without auto-fixing or inventing links.
+- Add opt-in Server Action freshness review (NCT009); valid stale-while-revalidate calls remain allowed by default.
+- Extend ESLint recommended checks and document a local-install/CI pilot workflow.
 
 - Replaced the lexical prototype with strict TypeScript and TypeScript Compiler API analysis.
 - Resolve direct Next imports, named aliases, namespace imports and local shadowing.

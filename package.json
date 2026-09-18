@@ -4,7 +4,7 @@
   "repository": { "type": "git", "url": "git+https://github.com/taneruzum/next-cache-trace.git" },
   "homepage": "https://github.com/taneruzum/next-cache-trace#readme",
   "bugs": { "url": "https://github.com/taneruzum/next-cache-trace/issues" },
-  "description": "Static cache-correctness analysis for Next.js App Router projects.",
+  "description": "Trace Next.js cache tag relationships and catch static cache API mistakes before they reach production.",
   "type": "module",
   "bin": {
     "next-cache-trace": "./bin/next-cache-trace.js"
@@ -31,6 +31,7 @@
     "audit": "node ./bin/next-cache-trace.js audit",
     "verify": "npm test && npm run test:pack && npm pack --dry-run && npm pack --workspace eslint-plugin-next-cache-trace --dry-run",
     "test:pack": "node scripts/pack-smoke.mjs",
+    "test:testbed": "node scripts/test-testbed.mjs",
     "prepack": "npm run build"
   },
   "workspaces": ["packages/eslint-plugin"],
