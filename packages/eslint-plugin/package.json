@@ -1,6 +1,6 @@
 {
   "name": "eslint-plugin-next-cache-trace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "repository": { "type": "git", "url": "git+https://github.com/taneruzum/next-cache-trace.git", "directory": "packages/eslint-plugin" },
   "homepage": "https://github.com/taneruzum/next-cache-trace/tree/main/packages/eslint-plugin#readme",
   "bugs": { "url": "https://github.com/taneruzum/next-cache-trace/issues" },
@@ -8,7 +8,7 @@
   "type": "module",
   "exports": { ".": { "types": "./index.d.ts", "import": "./index.js" } },
   "files": ["index.js", "index.d.ts", "README.md", "LICENSE"],
-  "peerDependencies": { "eslint": "^9.0.0 || ^10.0.0", "next-cache-trace": "^0.1.0" },
+  "peerDependencies": { "eslint": "^9.0.0 || ^10.0.0", "next-cache-trace": "^0.2.0" },
   "peerDependenciesMeta": { "next-cache-trace": { "optional": true } },
   "license": "MIT",
   "engines": { "node": ">=20.19.0" }

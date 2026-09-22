@@ -18,7 +18,12 @@ try {
   const plugin=JSON.parse(command(['pack','--workspace','eslint-plugin-next-cache-trace','--json','--ignore-scripts','--pack-destination',temp],root))[0];
   assert.ok(core.files.some(f=>f.path==='dist/index.d.ts'));
   assert.ok(!core.files.some(f=>f.path.startsWith('tests/') || f.path.startsWith('node_modules/')));
+  assert.ok(!core.files.some(f=>f.path.startsWith('maintainers/')));
   const manifest=JSON.parse(await readFile(join(root,'package.json'),'utf8'));
+  assert.equal(manifest.version,'0.2.0');
+  const pluginManifest=JSON.parse(await readFile(join(root,'packages/eslint-plugin/package.json'),'utf8'));
+  assert.equal(pluginManifest.version,'0.2.0');
+  assert.equal(pluginManifest.peerDependencies['next-cache-trace'],'^0.2.0');
   await writeFile(join(temp,'package.json'),JSON.stringify({private:true,type:'module'}));
   command(['install','--ignore-scripts','--no-audit','--no-fund',join(temp,core.filename),join(temp,plugin.filename),'eslint@'+manifest.devDependencies.eslint]);
   await mkdir(join(temp,'app'));

@@ -1,3 +1,5 @@
+> Historical 0.1.0 record; statements below apply to that release, not to 0.2.0.
+
 # Validation record
 
 ## Follow-up — 2026-09-19

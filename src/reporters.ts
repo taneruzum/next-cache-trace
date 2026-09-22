@@ -2,29 +2,65 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { resolve, sep } from 'node:path';
 import { RULES, type Report, type TagSite } from './model.js';
+import { VERSION } from './version.js';
 
 const escapeHtml = (value: unknown): string => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 export function formatJson(report: Report): string { return JSON.stringify(report, null, 2); }
 export function formatText(report: Report): string {
   const lines = ['next-cache-trace — ' + report.filesScanned + ' source file(s)', ''];
   if (!report.findings.length) lines.push('No findings within the analyzed scope.');
-  for (const f of report.findings) lines.push('[' + f.severity + '] ' + f.code + ' ' + f.file + ':' + f.line + ':' + f.column, '  ' + f.message, '  ' + f.help);
+  for (const f of report.findings) lines.push('[' + f.severity + (f.baselineState ? '/' + f.baselineState : '') + '] ' + f.code + ' ' + f.file + ':' + f.line + ':' + f.column, '  ' + f.message, '  ' + f.help);
   lines.push('', report.summary.error + ' error(s), ' + report.summary.warning + ' warning(s), ' + report.summary.info + ' info, ' + report.suppressedCount + ' suppressed',
-    'Graph: ' + report.graph.producers.length + ' literal producer(s), ' + report.graph.invalidations.length + ' invalidation(s), ' + report.graph.boundaries.length + ' cached boundary/boundaries.',
+    'Graph: ' + report.graph.producers.length + ' observed producer(s), ' + report.graph.invalidations.length + ' invalidation(s), ' + report.graph.boundaries.length + ' cached boundary/boundaries.',
+    'Coverage: ' + report.coverage.cacheUsages + ' cache usage(s), ' + (report.coverage.resolvedProducers + report.coverage.resolvedInvalidations) + ' constant-resolved tag site(s), ' + report.coverage.unresolved + ' unresolved diagnostic(s).',
     report.coverage.note);
+  if (report.baseline) lines.push('Baseline: ' + report.baseline.existing + ' existing, ' + report.baseline.new + ' new, ' + report.baseline.resolved + ' resolved. CI uses new findings only.');
+  return lines.join('\n');
+}
+
+export function explainTag(report: Report, tag: string): string {
+  const lines = ['Tag ' + JSON.stringify(tag), 'Static source evidence; CI still evaluates the complete report.', ''];
+  for (const [label, sites] of [['Producer', report.graph.producers], ['Invalidation', report.graph.invalidations]] as const) {
+    const matches = sites.filter(site => site.tag === tag);
+    if (!matches.length) lines.push(label + ': none observed');
+    for (const site of matches) {
+      lines.push(label + ': ' + site.method + ' in ' + site.scope + ' (' + site.file + ':' + site.line + ':' + site.column + ') [' + site.resolution + ']');
+      for (const step of site.evidence) lines.push('  ' + step.kind + ' ' + step.file + ':' + step.line + ':' + step.column + ' ' + JSON.stringify(step.expression));
+    }
+  }
+  lines.push('', report.coverage.note);
+  return lines.join('\n');
+}
+
+const markdown = (value: string): string => escapeHtml(value).replace(/([\\`*_{}\[\]()#+!|~])/g, '\\$1').replace(/[\r\n]+/g, ' ');
+export function formatMarkdown(report: Report): string {
+  const lines = ['# next-cache-trace', '', `${report.filesScanned} files; ${report.summary.error} errors, ${report.summary.warning} warnings, ${report.summary.info} informational findings.`, ''];
+  if (report.baseline) lines.push(`Baseline: **${report.baseline.new} new**, ${report.baseline.existing} existing, ${report.baseline.resolved} resolved. CI evaluates new findings.`, '');
+  lines.push('## Findings', '', '| State | Level | Rule | Source | Finding |', '| --- | --- | --- | --- | --- |');
+  const ordered = [...report.findings].sort((a, b) => Number(a.baselineState === 'existing') - Number(b.baselineState === 'existing'));
+  for (const f of ordered.slice(0, 100)) lines.push(`| ${f.baselineState ?? '—'} | ${f.severity} | ${f.code} | ${markdown(f.file)}:${f.line}:${f.column} | ${markdown(f.message.slice(0, 1200))} |`);
+  if (!report.findings.length) lines.push('| — | — | — | — | No findings in analyzed scope |');
+  if (report.findings.length > 100) lines.push('', 'Showing the first 100 findings; retain the full JSON/HTML report as an artifact.');
+  lines.push('', '## Tags', '', '| Kind | Tag | Source | Resolution |', '| --- | --- | --- | --- |');
+  const sites = [...report.graph.producers.map(site => ({...site, kind:'producer'})), ...report.graph.invalidations.map(site => ({...site, kind:'invalidation'}))];
+  for (const site of sites.slice(0, 100)) lines.push(`| ${site.kind} | ${markdown(site.tag.slice(0, 300))} | ${markdown(site.file)}:${site.line} | ${site.resolution} |`);
+  if (sites.length > 100) lines.push('', 'Showing the first 100 tag sites; see the complete JSON/HTML artifact for source evidence.');
+  lines.push('', `Coverage: ${report.coverage.cacheUsages} cache usages, ${report.coverage.unresolved} unresolved diagnostics.`, '', report.coverage.note);
   return lines.join('\n');
 }
 export function formatSarif(report: Report): string {
   const codes = Object.keys(RULES);
+  const occurrences = new Map<string, number>();
   return JSON.stringify({
     $schema: 'https://json.schemastore.org/sarif-2.1.0.json', version: '2.1.0',
-    runs: [{ tool: { driver: { name: 'next-cache-trace', version: '0.1.0', rules: Object.entries(RULES).map(([id, rule]) => ({ id, shortDescription: { text: rule.title }, fullDescription: { text: rule.help }, defaultConfiguration: { level: rule.severity === 'info' ? 'note' : rule.severity } })) } },
+    runs: [{ tool: { driver: { name: 'next-cache-trace', version: VERSION, rules: Object.entries(RULES).map(([id, rule]) => ({ id, shortDescription: { text: rule.title }, fullDescription: { text: rule.help }, defaultConfiguration: { level: rule.severity === 'info' ? 'note' : rule.severity } })) } },
       originalUriBaseIds: { '%SRCROOT%': { uri: pathToFileURL(resolve(report.projectRoot) + sep).href } },
       invocations: [{ executionSuccessful: true }],
-      results: report.findings.map(f => ({ ruleId: f.code, ruleIndex: codes.indexOf(f.code), level: f.severity === 'info' ? 'note' : f.severity,
-        message: { text: f.message }, partialFingerprints: { 'primaryLocationLineHash': createHash('sha256').update(f.code + ':' + f.file + ':' + f.message).digest('hex') },
+      results: report.findings.map(f => { const key = f.fingerprint ?? ''; const ordinal = occurrences.get(key) ?? 0; occurrences.set(key, ordinal + 1); return ({ ruleId: f.code, ruleIndex: codes.indexOf(f.code), level: f.severity === 'info' ? 'note' : f.severity,
+        ...(f.baselineState ? { baselineState: f.baselineState === 'existing' ? 'unchanged' : 'new' } : {}),
+        message: { text: f.message }, partialFingerprints: { 'primaryLocationLineHash': createHash('sha256').update(f.code + ':' + f.file + ':' + f.message).digest('hex'), 'nextCacheTrace/v1': key + ':' + ordinal },
         locations: [{ physicalLocation: { artifactLocation: { uri: f.file.split('/').map(encodeURIComponent).join('/'), uriBaseId: '%SRCROOT%' }, region: { startLine: f.line, startColumn: f.column } } }]
-      })) }]
+      }); }) }]
   }, null, 2);
 }
 export function formatHtml(report: Report): string {
@@ -34,7 +70,7 @@ export function formatHtml(report: Report): string {
     tags.get(item.tag)![kind].push(item);
   }
   const sites = (entries: TagSite[]): string => entries.length
-    ? entries.map(e => '<span class="site"><span class="fn">' + escapeHtml(e.scope) + '</span> <span class="m mono">' + escapeHtml(e.method) + '</span><br><span class="loc mono">' + escapeHtml(e.file) + ':' + e.line + '</span></span>').join('')
+    ? entries.map(e => '<span class="site"><span class="fn">' + escapeHtml(e.scope) + '</span> <span class="m mono">' + escapeHtml(e.method) + '</span><br><span class="loc mono">' + escapeHtml(e.file) + ':' + e.line + '</span></span><details><summary>Source evidence (' + e.resolution + ')</summary><ol>' + e.evidence.map(step => '<li>' + escapeHtml(step.kind + ' ' + step.file + ':' + step.line + ' ' + step.expression) + '</li>').join('') + '</ol></details>').join('')
     : '<span class="none">None observed</span>';
   // A tag's state summarises the evidence for the pair; it is not a rule verdict.
   // Any of these can be intentional, so the row is flagged for review, never called a bug.
@@ -55,7 +91,7 @@ export function formatHtml(report: Report): string {
     : '<div class="clean"><div class="big">No literal tag relationships observed</div><div class="small">This project may not use tag-based caching, or every tag is built dynamically.</div></div>';
   const findings = report.findings.map(f => '<article class="find ' + f.severity + '">'
     + '<div class="stripe"></div>'
-    + '<div class="code"><span class="rule mono">' + f.code + '</span><span class="sev">' + f.severity + '</span></div>'
+    + '<div class="code"><span class="rule mono">' + f.code + '</span><span class="sev">' + f.severity + (f.baselineState ? ' / ' + f.baselineState : '') + '</span></div>'
     + '<div class="body"><div class="loc mono">' + escapeHtml(f.file) + ':' + f.line + ':' + f.column + '</div>'
     + '<div class="msg">' + escapeHtml(f.message) + '</div>'
     + '<details><summary>Guidance</summary><div class="help">' + escapeHtml(f.help) + '</div></details></div></article>').join('');
@@ -76,10 +112,11 @@ export function formatHtml(report: Report): string {
     + '</div></div></div>'
     + '<div class="wrap">'
     + '<p class="caveat"><b>Static evidence only.</b> ' + escapeHtml(report.coverage.note.replace('Static evidence only. ', '')) + '</p>'
-    + '<section><h2>Tag ledger</h2><p class="sub">Every literal tag, beside the code that produces it and the code that invalidates it. Highlighted rows have one side missing or span several route areas. Review them &mdash; a highlighted row is evidence, not a verdict.</p>' + ledger + '</section>'
+    + (report.baseline ? '<p class="caveat"><b>Baseline:</b> ' + report.baseline.existing + ' existing, ' + report.baseline.new + ' new, ' + report.baseline.resolved + ' resolved. CI uses new findings only.</p>' : '')
+    + '<section><h2>Tag ledger</h2><p class="sub">Every observed tag, beside its producer and invalidation sites. Expand source evidence to follow constant definitions and imports. Highlighted rows have one side missing or span several route areas; review them in context.</p>' + ledger + '</section>'
     + '<section><h2>Findings</h2><p class="sub">Diagnostics within scanned files, most severe first.</p>'
     + (findings ? '<div class="finds">' + findings + '</div>' : '<div class="clean"><div class="big">No findings within the analyzed scope</div><div class="small">Absence of findings is not proof that caching is correct.</div></div>')
     + '</section>'
-    + '<div class="foot"><span>' + report.graph.producers.length + ' literal producers</span><span>' + report.graph.invalidations.length + ' invalidations</span><span>' + report.graph.boundaries.length + ' cached boundaries</span></div>'
+    + '<div class="foot"><span>' + report.graph.producers.length + ' observed producers</span><span>' + report.graph.invalidations.length + ' invalidations</span><span>' + report.graph.boundaries.length + ' cached boundaries</span><span>' + (report.coverage.resolvedProducers + report.coverage.resolvedInvalidations) + ' constant-resolved sites</span></div>'
     + '</div></body></html>';
 }

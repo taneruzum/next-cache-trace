@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { analyzeSource } from './ast.js';
 import { analyzeProjectSync, buildReport } from './analyze.js';
 import { RULES, type Finding, type RuleCode, type TraceOptions } from './model.js';
+import { VERSION } from './version.js';
 
 const reports = new WeakMap<object, Finding[]>();
 function diagnostics(context: Rule.RuleContext): Finding[] {
@@ -39,7 +40,7 @@ for (const code of Object.keys(RULES) as RuleCode[]) rules[code] = {
     } };
   }
 }
-const plugin: ESLint.Plugin = { meta: { name: 'eslint-plugin-next-cache-trace', version: '0.1.0' }, rules, configs: {} };
+const plugin: ESLint.Plugin = { meta: { name: 'eslint-plugin-next-cache-trace', version: VERSION }, rules, configs: {} };
 plugin.configs = {
   recommended: { plugins: { 'next-cache-trace': plugin }, rules: { 'next-cache-trace/NCT002': 'error', 'next-cache-trace/NCT005': 'warn', 'next-cache-trace/NCT006': 'warn', 'next-cache-trace/NCT007': 'warn', 'next-cache-trace/NCT008': 'warn', 'next-cache-trace/NCT900': 'warn' } },
   project: { plugins: { 'next-cache-trace': plugin }, rules: Object.fromEntries(Object.entries(RULES).map(([code, rule]) => ['next-cache-trace/' + code, rule.optIn ? 'off' : rule.severity === 'error' ? 'error' : 'warn'])) }

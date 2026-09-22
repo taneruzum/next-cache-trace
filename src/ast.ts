@@ -1,23 +1,20 @@
 import ts from 'typescript';
 import { posix } from 'node:path';
 import { finding, type FileAnalysis, type Location, type Boundary, type TagSite } from './model.js';
-import { unwrap, propertyName } from './config.js';
+import { unwrap } from './config.js';
+import { SourceContext } from './resolver.js';
+import type { EvidenceStep } from './model.js';
 
 const DIRECTIVES = new Set(['use cache', 'use cache: remote', 'use cache: private']);
 export function analyzeSource(file: string, text: string): FileAnalysis {
-  const canonical = (name: string): string => posix.normalize(name.replaceAll('\\', '/'));
-  const compilerFile = canonical(file);
-  const compilerOptions: ts.CompilerOptions = { allowJs: true, noLib: true, noResolve: true, target: ts.ScriptTarget.Latest, jsx: ts.JsxEmit.Preserve };
-  const source = ts.createSourceFile(compilerFile, text, ts.ScriptTarget.Latest, true);
-  const host: ts.CompilerHost = {
-    getSourceFile: name => canonical(name) === compilerFile ? source : undefined,
-    getDefaultLibFileName: () => '', writeFile: () => {}, getCurrentDirectory: () => '',
-    getDirectories: () => [], fileExists: name => canonical(name) === compilerFile, readFile: name => canonical(name) === compilerFile ? text : undefined,
-    getCanonicalFileName: canonical, useCaseSensitiveFileNames: () => true, getNewLine: () => '\n'
-  };
-  const program = ts.createProgram([compilerFile], compilerOptions, host);
-  const checker = program.getTypeChecker();
-  const result: FileAnalysis = { file, findings: [], producers: [], invalidations: [], boundaries: [], usages: [] };
+  return analyzeFile(file, new SourceContext(new Map([[file, text]])));
+}
+
+export function analyzeFile(file: string, context: SourceContext): FileAnalysis {
+  const compilerFile = posix.normalize(file.replaceAll('\\', '/'));
+  const source = context.sources.get(compilerFile)!;
+  const { program, checker } = context;
+  const result: FileAnalysis = { file, findings: [], producers: [], invalidations: [], boundaries: [], usages: [], cacheUsages: [] };
   const location = (node: ts.Node): Location => {
     const pos = source.getLineAndCharacterOfPosition(node.getStart(source));
     return { file, line: pos.line + 1, column: pos.character + 1 };
@@ -80,39 +77,48 @@ export function analyzeSource(file: string, text: string): FileAnalysis {
   const app = segments.indexOf('app');
   const area = app < 0 ? null : (segments.slice(app + 1, -1).find(p => !p.startsWith('(') && !p.startsWith('@')) ?? '(root)');
   const unknown = (node: ts.Node, message: string) => result.findings.push(finding('NCT900', location(node), message));
-  function addTags(args: readonly ts.Expression[], method: string, call: ts.CallExpression, scope: string, producer: boolean): void {
+  function addTags(args: readonly ts.Expression[], method: string, call: ts.CallExpression, scope: string, producer: boolean, trail: EvidenceStep[] = []): void {
     if (!args.length) { unknown(call, method + ' has no statically readable tag arguments.'); return; }
     // Only count fully known, valid-length literals. Spreads/variables may change
     // cardinality and are covered by NCT900 instead of an invented exact count.
-    const literals = args.map(unwrap);
-    if (producer && literals.length > 128 && literals.every(value => (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) && value.text.length <= 256)) {
-      result.findings.push(finding('NCT008', location(call), method + ' supplies ' + literals.length + ' literal tags in one call/array; the supported limit is 128. Reduce the list and review affected invalidations.'));
+    const resolved: { value: string; evidence: EvidenceStep[] }[] = [];
+    let complete = true;
+    let work = 0;
+    const collect = (arg: ts.Expression, evidence: EvidenceStep[], depth = 0): void => {
+      if (++work > 10000) {
+        if (work === 10001) unknown(call, method + ': Tag expansion limit (10000 expressions) reached.');
+        complete = false;
+        return;
+      }
+      if (ts.isSpreadElement(arg)) {
+        const spread = context.resolve(arg.expression, evidence);
+        if (depth < 16 && spread.node && ts.isArrayLiteralExpression(spread.node)) {
+          for (const item of spread.node.elements) { collect(item, spread.evidence, depth + 1); if (work > 10000) break; }
+        } else { complete = false; unknown(call, method + ': ' + (spread.reason ?? 'Unresolved spread or array depth limit.')); }
+      } else {
+        const value = context.strings(arg, evidence);
+        if (value.reason) { complete = false; unknown(call, method + ': ' + value.reason); }
+        resolved.push(...value.values);
+      }
+    };
+    for (const arg of args) { collect(arg, trail); if (work > 10000) break; }
+    if (producer && complete && resolved.length > 128 && resolved.every(value => value.value.length <= 256)) {
+      result.findings.push(finding('NCT008', location(call), method + ' supplies ' + resolved.length + ' resolved tags in one call/array; the supported limit is 128. Reduce the list and review affected invalidations.'));
     }
-    for (const arg of args) {
-      const value = unwrap(arg);
-      if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
-        if (value.text.length > 256) result.findings.push(finding('NCT007', location(call), method + ' uses a literal tag of ' + value.text.length + ' UTF-16 code units; the supported limit is 256. This tag cannot be reliably assigned and invalidated.'));
-        const site: TagSite = { ...location(call), tag: value.text, method, scope, area };
+    for (const value of resolved) {
+        if (value.value.length > 256) result.findings.push(finding('NCT007', location(call), method + ' uses a tag of ' + value.value.length + ' UTF-16 code units; the supported limit is 256. This tag cannot be reliably assigned and invalidated.'));
+        const site: TagSite = { ...location(call), tag: value.value, method, scope, area,
+          resolution: value.evidence.some(e => e.kind === 'definition' || e.kind === 'import') ? 'resolved' : 'literal',
+          evidence: [context.step(call, 'usage'), ...value.evidence] };
         (producer ? result.producers : result.invalidations).push(site);
-      } else unknown(arg, method + ' uses a dynamic tag; no relationship is inferred.');
     }
   }
-  function getProperty(object: ts.Expression | undefined, key: string): ts.Expression | undefined {
-    if (!object) return undefined;
-    const node = unwrap(object);
-    if (!ts.isObjectLiteralExpression(node)) return undefined;
-    let result: ts.Expression | undefined;
-    for (const p of node.properties) {
-      if (ts.isSpreadAssignment(p)) result = undefined;
-      else if (propertyName(p.name) === key) result = ts.isPropertyAssignment(p) ? p.initializer : undefined;
-    }
-    return result;
-  }
-  function optionTags(options: ts.Expression | undefined, call: ts.CallExpression, method: string, scope: string): void {
+  function optionTags(options: ts.Expression | undefined, call: ts.CallExpression, method: string, scope: string, evidence: EvidenceStep[] = []): void {
     if (!options) return;
-    const tagArray = getProperty(options, 'tags');
-    if (tagArray && ts.isArrayLiteralExpression(unwrap(tagArray))) addTags((unwrap(tagArray) as ts.ArrayLiteralExpression).elements, method, call, scope, true);
-    else if (tagArray || !ts.isObjectLiteralExpression(unwrap(options)) || (ts.isObjectLiteralExpression(unwrap(options)) && (unwrap(options) as ts.ObjectLiteralExpression).properties.some(p => ts.isSpreadAssignment(p)))) unknown(options, method + ' options cannot be fully resolved; they may contain tag producers.');
+    const property = context.property(options, 'tags', evidence);
+    const tagArray = property.node && context.resolve(property.node, property.evidence);
+    if (tagArray?.node && ts.isArrayLiteralExpression(tagArray.node)) addTags(tagArray.node.elements, method, call, scope, true, tagArray.evidence);
+    else if (property.node || property.reason !== 'No statically readable tags property.') unknown(call, method + ': ' + (tagArray?.reason ?? property.reason ?? 'Tag options cannot be resolved.'));
   }
   function visit(node: ts.Node, boundary?: Boundary, scope = '<module>', serverAction = false): void {
     if (ts.isFunctionLike(node) && 'body' in node && node.body) {
@@ -144,12 +150,13 @@ export function analyzeSource(file: string, text: string): FileAnalysis {
       }
       if (method === 'cacheLife') { if (boundary) boundary.explicitLifetime = true; result.usages.push(location(node)); }
       if (method === 'unstable_cache') optionTags(node.arguments[2], node, method, scope);
+      if (method && ['cacheTag', 'cacheLife', 'updateTag', 'revalidateTag', 'unstable_cache'].includes(method)) result.cacheUsages.push(location(node));
       const expr = unwrap(node.expression);
       if (ts.isIdentifier(expr) && expr.text === 'fetch' && !checker.getSymbolAtLocation(expr)) {
         const options = node.arguments[1];
-        const next = getProperty(options, 'next');
-        if (next) optionTags(next, node, 'fetch', scope);
-        else if (options && (!ts.isObjectLiteralExpression(unwrap(options)) || (unwrap(options) as ts.ObjectLiteralExpression).properties.some(p => ts.isSpreadAssignment(p)))) unknown(options, 'fetch options may contain unobserved next.tags.');
+        const next = options && context.property(options, 'next');
+        if (next?.node) { result.cacheUsages.push(location(node)); optionTags(next.node, node, 'fetch', scope, next.evidence); }
+        else if (next && next.reason !== 'No statically readable next property.') { result.cacheUsages.push(location(node)); unknown(node, 'fetch options may contain unobserved next.tags. ' + next.reason); }
       }
       const request = apiName(node.expression, 'next/headers');
       if (boundary && boundary.directive !== 'use cache: private' && (request === 'cookies' || request === 'headers')) result.findings.push(finding('NCT002', location(node), request + '() is called directly inside ' + boundary.directive + ' function ' + boundary.name + '.'));

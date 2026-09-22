@@ -1,6 +1,6 @@
 import ts from 'typescript';
-import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { RULES, type CacheConfig, type TraceOptions, type RuleCode } from './model.js';
 
 export function unwrap(node: ts.Expression): ts.Expression {
@@ -18,7 +18,7 @@ export function readOptions(root: string, options: TraceOptions = {}): TraceOpti
   if (options.config || existsSync(path)) {
     const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
     if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('Trace config must be an object');
-    for (const key of Object.keys(value)) if (!['include', 'exclude', 'rules', 'cacheComponents'].includes(key)) throw new Error('Unknown trace config key: ' + key);
+    for (const key of Object.keys(value)) if (!['include', 'exclude', 'rules', 'cacheComponents', 'minFiles', 'requireCacheUsage'].includes(key)) throw new Error('Unknown trace config key: ' + key);
     for (const key of ['include', 'exclude']) if (value[key] !== undefined && (!Array.isArray(value[key]) || !(value[key] as unknown[]).every(x => typeof x === 'string'))) throw new Error(key + ' must be an array of glob strings');
     if (value.cacheComponents !== undefined && typeof value.cacheComponents !== 'boolean') throw new Error('cacheComponents override must be a boolean');
     if (value.rules !== undefined) {
@@ -28,8 +28,40 @@ export function readOptions(root: string, options: TraceOptions = {}): TraceOpti
     saved = value as TraceOptions;
   }
   const merged = { ...saved, ...options, exclude: [...(saved.exclude ?? []), ...(options.exclude ?? [])], rules: { ...saved.rules, ...options.rules } };
+  if (merged.minFiles !== undefined && (!Number.isSafeInteger(merged.minFiles) || merged.minFiles < 0)) throw new Error('minFiles must be a non-negative integer');
+  if (merged.requireCacheUsage !== undefined && typeof merged.requireCacheUsage !== 'boolean') throw new Error('requireCacheUsage must be a boolean');
   for (const [code, level] of Object.entries(merged.rules)) if (!RULES[code as RuleCode] || !['off', 'info', 'warning', 'error'].includes(level!)) throw new Error('Invalid rule setting: ' + code);
   return merged;
+}
+
+/** Read only compiler options needed for module lookup, bounded to this app. */
+export function readModuleOptions(root: string): ts.CompilerOptions {
+  const config = ['tsconfig.json', 'jsconfig.json'].find(file => existsSync(join(root, file)));
+  if (!config) return {};
+  const read = (file: string, seen: Set<string>): ts.CompilerOptions => {
+    const real = realpathSync(file);
+    const path = relative(realpathSync(root), real);
+    if (path.startsWith('..') || isAbsolute(path)) throw new Error('Compiler config must stay inside the audited project: ' + file);
+    if (seen.has(real) || seen.size >= 16) throw new Error('Cyclic or excessively deep compiler config extends');
+    seen.add(real);
+    const parsed = ts.parseConfigFileTextToJson(file, readFileSync(file, 'utf8'));
+    if (parsed.error) throw new Error('Invalid compiler config: ' + file);
+    const value = parsed.config;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid compiler config object: ' + file);
+    let inherited: ts.CompilerOptions = {};
+    if (value.extends !== undefined) {
+      if (typeof value.extends !== 'string' || !value.extends.startsWith('.')) throw new Error('Only relative, in-project compiler config extends are supported');
+      const base = resolve(dirname(file), value.extends);
+      inherited = read(existsSync(base) ? base : base + '.json', seen);
+    }
+    const options = value.compilerOptions ?? {};
+    const converted = ts.convertCompilerOptionsFromJson({ ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }), ...(options.paths === undefined ? {} : { paths: options.paths }) }, dirname(file));
+    if (converted.errors.length) throw new Error('Invalid baseUrl/paths in ' + file);
+    const combined = { ...inherited, ...converted.options };
+    if (options.paths && !combined.baseUrl) combined.baseUrl = dirname(file);
+    return combined;
+  };
+  return read(join(root, config), new Set());
 }
 
 // Only inspect the exported object. Never import/execute a user's config.

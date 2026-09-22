@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 — Unreleased
+
+- Resolve direct immutable constants, object/array fields and named imports with bounded source evidence chains.
+- Add count-aware semantic baselines, full-report Markdown output, `--min-files` and `--require-cache-usage` scope gates.
+- Add schema 0.3 coverage fields, fresh source snapshots, nested-app protection and package-wide version metadata.
+- Move maintainer validation and release records outside the npm package.
+
+The report schema is now 0.3 and graph sites include resolution and evidence fields; review typed consumers before upgrading. Baselines require the same tool minor, schema and analysis configuration. Compiler aliases support only relative config inheritance inside the audited root; nested Next apps must be excluded or audited separately.
+
 ## 0.1.0 — 2026-09-19
 
 - Add Next.js 16 migration warnings for single-argument revalidateTag (NCT006).

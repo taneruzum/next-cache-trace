@@ -1,6 +1,7 @@
 node_modules/
 # Local planning notes refer to unrelated private projects.
 /PLAN.md
+/DEVIR-NOTU.md
 coverage/
 *.sarif
 cache-report.html

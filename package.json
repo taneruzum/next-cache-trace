@@ -1,6 +1,6 @@
 {
   "name": "next-cache-trace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "repository": { "type": "git", "url": "git+https://github.com/taneruzum/next-cache-trace.git" },
   "homepage": "https://github.com/taneruzum/next-cache-trace#readme",
   "bugs": { "url": "https://github.com/taneruzum/next-cache-trace/issues" },
@@ -28,8 +28,11 @@
     "build": "tsc -p tsconfig.json",
     "pretest": "npm run build",
     "test": "node scripts/test.mjs",
+    "lint": "eslint src bin scripts packages/eslint-plugin tests",
+    "test:coverage": "npm run build && node scripts/test.mjs --coverage",
+    "benchmark": "npm run build && node scripts/benchmark.mjs",
     "audit": "node ./bin/next-cache-trace.js audit",
-    "verify": "npm test && npm run test:pack && npm pack --dry-run && npm pack --workspace eslint-plugin-next-cache-trace --dry-run",
+    "verify": "npm run lint && npm test && npm run test:pack && npm pack --dry-run && npm pack --workspace eslint-plugin-next-cache-trace --dry-run",
     "test:pack": "node scripts/pack-smoke.mjs",
     "test:testbed": "node scripts/test-testbed.mjs",
     "prepack": "npm run build"

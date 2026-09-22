@@ -1,24 +1,16 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { extname, join, relative, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 import picomatch from 'picomatch';
 import ts from 'typescript';
-import { analyzeSource } from './ast.js';
-import { readCacheConfig, readOptions } from './config.js';
+import { analyzeFile } from './ast.js';
+import { readCacheConfig, readModuleOptions, readOptions } from './config.js';
 import { RULES, finding, type CacheConfig, type FileAnalysis, type Finding, type Report, type TraceOptions } from './model.js';
+import { SourceContext } from './resolver.js';
+import { digest, identifyFindings } from './identity.js';
 
 const EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts']);
 const IGNORE_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'out', '.turbo', '.vercel', '__tests__', '__fixtures__']);
 const DEFAULT_EXCLUDE = ['**/*.d.{ts,mts,cts}', '**/*.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}', '**/next.config.*', '**/eslint.config.*'];
-// Content-keyed, bounded cache: no cross-run stale diagnostics after edits.
-const cache = new Map<string, { text: string; analysis: FileAnalysis }>();
-function cachedAnalysis(file: string, text: string): FileAnalysis {
-  const cached = cache.get(file);
-  if (cached?.text === text) return cached.analysis;
-  const analysis = analyzeSource(file, text);
-  if (cache.size >= 256) cache.delete(cache.keys().next().value!);
-  cache.set(file, { text, analysis });
-  return analysis;
-}
 
 function suppressions(text: string): Map<number, Set<string>> {
   const map = new Map<number, Set<string>>();
@@ -71,7 +63,7 @@ export function buildReport(root: string, files: FileAnalysis[], sources: Map<st
         const site = firstProducer.get(tag)!;
         return JSON.stringify(tag) + ' (' + site.file + ')';
       }).join(', ') + '. Verify intent before changing the tag; tags are case-sensitive.' : '';
-      findings.push(finding('NCT001', item, item.method + '(' + JSON.stringify(item.tag) + ') has no observed literal producer in this scan. Dynamic/external producers may still exist.' + hint));
+      findings.push(finding('NCT001', item, item.method + '(' + JSON.stringify(item.tag) + ') has no observed producer in this scan. Dynamic/external producers may still exist.' + hint));
     }
     const tags = new Map<string, typeof producers>();
     for (const p of producers) { const group = tags.get(p.tag) ?? []; group.push(p); tags.set(p.tag, group); }
@@ -94,9 +86,14 @@ export function buildReport(root: string, files: FileAnalysis[], sources: Map<st
   const summary = { error: 0, warning: 0, info: 0 };
   for (const item of visible) summary[item.severity]++;
   return {
-    schemaVersion: '0.2', projectRoot: root, config, filesScanned: files.length, summary, findings: visible, suppressedCount,
+    schemaVersion: '0.3', projectRoot: root, config, filesScanned: files.length, summary, findings: identifyFindings(visible, sources), suppressedCount,
+    analysisSignature: digest(JSON.stringify({ config: config.enabled, include: [...(options.include ?? ['**/*'])].sort(), exclude: [...(options.exclude ?? [])].sort(),
+      rules: Object.entries(options.rules ?? {}).sort(([a], [b]) => a.localeCompare(b)), minFiles: options.minFiles ?? 0, requireCacheUsage: options.requireCacheUsage ?? false })),
     graph: { producers, invalidations, boundaries },
-    coverage: { literalProducers: producers.length, literalInvalidations: invalidations.length, unresolved: findings.filter(x => ['NCT900', 'NCT901', 'NCT902'].includes(x.code)).length,
+    coverage: { literalProducers: producers.filter(p => p.resolution === 'literal').length, literalInvalidations: invalidations.filter(p => p.resolution === 'literal').length,
+      resolvedProducers: producers.filter(p => p.resolution === 'resolved').length, resolvedInvalidations: invalidations.filter(p => p.resolution === 'resolved').length,
+      cacheUsages: files.reduce((n, file) => n + file.cacheUsages.length + file.boundaries.length, 0), parseErrors: findings.filter(x => x.code === 'NCT902').length,
+      unresolved: findings.filter(x => ['NCT900', 'NCT901', 'NCT902'].includes(x.code)).length,
       note: 'Static evidence only. No findings does not prove cache correctness. Indirect helpers, re-exports, runtime behavior and excluded files are not resolved.' }
   };
 }
@@ -109,6 +106,10 @@ export function analyzeProjectSync(directory: string, options: TraceOptions = {}
   const exclude = picomatch([...DEFAULT_EXCLUDE, ...(settings.exclude ?? [])], { dot: true });
   const sources = new Map<string, string>();
   function walk(dir: string): void {
+    if (dir !== root && (['next.config.ts', 'next.config.js', 'next.config.mjs', 'next.config.cjs', 'next.config.mts'].some(file => existsSync(join(dir, file)))
+      || existsSync(join(dir, 'package.json')) && (() => { const p = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')); return p.dependencies?.next || p.devDependencies?.next; })())) {
+      throw new Error('Nested Next.js app found at ' + relative(root, dir) + '; audit one app root at a time or exclude it');
+    }
     for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const path = join(dir, entry.name);
       const file = relative(root, path).replaceAll('\\', '/');
@@ -121,9 +122,15 @@ export function analyzeProjectSync(directory: string, options: TraceOptions = {}
     }
   }
   walk(root);
-  for (const [file, content] of Object.entries(overrides)) if (!sources.has(file) && !file.startsWith('../') && !file.startsWith('/') && include(file) && !exclude(file)) sources.set(file, content);
-  const files = [...sources].map(([file, text]) => cachedAnalysis(file, text));
-  return buildReport(root, files, sources, readCacheConfig(root, settings.cacheComponents), settings);
+  for (const [file, content] of Object.entries(overrides)) if (!sources.has(file) && !file.split(/[\\/]/).includes('..') && !isAbsolute(file) && include(file) && !exclude(file)) sources.set(file, content);
+  const moduleOptions = readModuleOptions(root);
+  const context = new SourceContext(sources, root, moduleOptions);
+  const files = [...sources.keys()].map(file => analyzeFile(file, context));
+  const report = buildReport(root, files, sources, readCacheConfig(root, settings.cacheComponents), settings);
+  report.analysisSignature = digest(report.analysisSignature + JSON.stringify({ ...moduleOptions, baseUrl: moduleOptions.baseUrl ? relative(root, moduleOptions.baseUrl).replaceAll('\\', '/') : undefined }));
+  if (settings.minFiles !== undefined && report.filesScanned < settings.minFiles) throw new Error('Scope requirement failed: scanned ' + report.filesScanned + ' files; expected at least ' + settings.minFiles);
+  if (settings.requireCacheUsage && !report.coverage.cacheUsages) throw new Error('Scope requirement failed: no supported cache usage observed in ' + report.filesScanned + ' files');
+  return report;
 }
 export async function analyzeProject(directory: string, options: TraceOptions = {}): Promise<Report> {
   return analyzeProjectSync(directory, options);

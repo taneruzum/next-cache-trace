@@ -2,7 +2,16 @@
 
 The intended user is a team with Next.js 16 App Router cache code: literal cacheTag/fetch/unstable_cache tags and tag-based invalidation. A project without those patterns is not a convincing test of this tool's value. This is a static review/CI tool, not a solution to every stale UI, framework bug, or distributed cache problem.
 
-## Install the unpublished candidate locally
+## Install the package or a reviewed local build
+
+From your Next.js app, install the registry release:
+
+```sh
+npm install --save-dev next-cache-trace@0.2.0
+npx --no-install next-cache-trace audit . --fail-on none
+```
+
+To test a local build before publication, use a tarball instead.
 
 From the package checkout:
 
@@ -15,14 +24,14 @@ npm pack --pack-destination artifacts
 From your Next.js app, substitute the actual absolute tarball path:
 
 ```sh
-npm install --save-dev /absolute/path/to/next-cache-trace/artifacts/next-cache-trace-0.1.0.tgz
+npm install --save-dev /absolute/path/to/next-cache-trace/artifacts/next-cache-trace-0.2.0.tgz
 npx --no-install next-cache-trace audit . --fail-on none
 npx --no-install next-cache-trace audit . --format html --output artifacts/cache.html
 ```
 
 Quote paths containing spaces in PowerShell. Installing changes the app's package.json and lockfile; do it on a review branch. Alternatively, run `node /absolute/path/to/next-cache-trace/bin/next-cache-trace.js audit /absolute/path/to/app --fail-on none` without installing anything in the app. Scanning does not execute or edit app source. Existing report files require `--force` to replace.
 
-The tarball is local, not a registry release. Do not commit an absolute `file:` dependency as a portable production setup. Once an npm version is actually published, replace the pilot dependency with that pinned registry version.
+Do not commit an absolute `file:` dependency as a portable production setup. Replace a local pilot dependency with the corresponding pinned registry release once available.
 
 ## Work through the first report
 
@@ -54,7 +63,7 @@ After installing the package, add an app script:
 }
 ```
 
-Run `npm run cache:check` after the ordinary dependency-install step in CI. Warning thresholds also include heuristic NCT001/NCT003 warnings unless configured off. Document legitimate exceptions with a specific suppression reason. There is no existing-findings baseline feature: resolve or explicitly suppress known findings before making the check blocking.
+Run `npm run cache:check` after the ordinary dependency-install step in CI. Warning thresholds also include heuristic NCT001/NCT003 warnings unless configured off. For a gradual rollout, create a reviewed baseline with `next-cache-trace audit . --baseline .next-cache-trace-baseline.json --update-baseline --fail-on none`, then compare it on later full scans with `--baseline ... --fail-on warning`. Existing findings remain visible; only new findings affect the baseline threshold.
 
 ## Validate demand separately from tests
 
@@ -72,11 +81,21 @@ Continue investing if the tool finds useful issues their current workflow misses
 
 ## External manual testbed
 
-For the separately supplied `next-cache-testbed` fixture only:
+For the separately supplied `next-cache-testbed` environment only:
 
 ```sh
 npm run build
 npm run test:testbed -- /absolute/path/to/next-cache-testbed
 ```
 
-This optional smoke script checks that fixture's known outcomes and writes HTML/JSON/SARIF reports under the package's `artifacts` directory. It does not install dependencies or modify testbed source. It is not run by normal CI because the external fixture is not distributed with the package.
+That environment has two halves. `apps/ayaz` is a real Next.js 16 application
+built on Cache Components; it is the reference for what a correct cache graph
+looks like, and it is the only part that is installed and run. `fixtures/` holds
+scan-only audit roots that deliberately trigger every rule, plus the resolver
+cases the analyzer is documented not to follow.
+
+The script asserts outcomes by rule, file and line rather than by totals, checks
+that the testbed sources are byte-identical afterwards, and writes HTML, JSON,
+SARIF and Markdown reports under the package's `artifacts` directory. It never
+installs dependencies or modifies testbed source. It is not run by normal CI,
+because the environment is not distributed with the package.
