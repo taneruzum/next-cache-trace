@@ -10,7 +10,7 @@
 
 ### 0.2.0 sonrası patch notu
 
-`eslint-plugin-next-cache-trace` çalışma zamanında `next-cache-trace/eslint` export'una ihtiyaç duyuyor. 0.2.0 manuel testinden sonra plugin manifestindeki ana paket peer dependency'si `optional` olmaktan çıkarılacak ve ana paket sürümüyle eşleşen zorunlu peer aralığı olarak yayımlanacak. Kod davranışı değişmediği için bu düzeltme `0.2.1` patch sürümüne adaydır. 0.2.0 manuel testinde hem ana CLI/API hem de ESLint plugin kurulumu ayrıca kontrol edilmelidir.
+`eslint-plugin-next-cache-trace` çalışma zamanında `next-cache-trace/eslint` export'una ihtiyaç duyuyor. Kullanıcı bu peer metadata değişikliğini 0.2.0 sonrasına bıraktı. `0.2.1` patch olması, kurulum ve yükseltme uyumluluğunun doğrulanmasına bağlıdır; optional peer'ı zorunlu yapmak yalnız metadata düzenlemesi olduğu için otomatik olarak uyumlu sayılmaz. Uyumsuz gereksinim getirirse sonraki minor'a alınır. Ayrıntılar: [branch ve sürüm politikası](maintainers/versioning-policy.md).
 
 ## 1. Başlangıç noktamız
 

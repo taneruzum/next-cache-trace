@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — Unreleased
+## 0.2.0 — 2026-09-26
 
 - Resolve direct immutable constants, object/array fields and named imports with bounded source evidence chains.
 - Add count-aware semantic baselines, full-report Markdown output, `--min-files` and `--require-cache-usage` scope gates.
