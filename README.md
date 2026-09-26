@@ -1,7 +1,5 @@
 # next-cache-trace
 
-> This checkout contains the tested 0.2.0 release candidate. npm publication is pending; the registry currently serves 0.1.0. Use the local tarball instructions below to try 0.2.0 features until it is published.
-
 Trace Next.js cache tag relationships and catch static cache API mistakes before they reach production.
 
 Use it when migrating cache code to Next.js 16, reviewing a tag rename, or adding cache checks to CI. It finds invalidations without observed tag producers (with spelling/case suggestions), deprecated invalidation calls, oversized tag lists, and direct request-data reads inside shared caches. It does **not** diagnose every stale-page or Router Cache problem.
