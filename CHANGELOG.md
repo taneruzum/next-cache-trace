@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-09-28
+
+- Add `audit --explain` for source excerpts, explanations and conditional solution examples in text/Markdown. HTML includes expandable guidance and JSON carries structured explanation data from the analyzed source snapshot.
+- Resolve named constant re-export chains, aliases and imported local export lists, preserving every source evidence hop and cross-file mutation/escape checks. Wildcard/default/namespace exports and re-exported framework functions remain unsupported.
+- Add idempotent `init [directory] [--dry-run]` to prepare a config and `cache:check` script while preserving existing entries. No dependency installation or baseline acceptance is performed.
+- Add read-only `doctor` checks for the app manifest, Node/installed Next version, configuration, scan scope and unresolved coverage, with text/JSON output.
+- Set report schema to 0.4. Review and regenerate 0.2.x/schema 0.3 baselines. Reports now contain bounded source excerpts. Rule defaults and audit thresholds are unchanged.
+- Keep the ESLint alias peer optional; align both package versions and its peer range for 0.3.0.
+
 ## 0.2.0 — 2026-09-26
 
 - Resolve direct immutable constants, object/array fields and named imports with bounded source evidence chains.

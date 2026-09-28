@@ -1,4 +1,16 @@
-# next-cache-trace — 0.1.0 sonrası yol haritası
+# next-cache-trace — yol haritası
+
+## 28 Eylül 2026 — 0.3.0 için kabul edilen kapsam
+
+Kullanıcı kararıyla bu sürümün odağı **örnekli açıklamalar + sınırlı yeniden export desteği + kolay kurulum** oldu. Yerel uygulama:
+
+- `audit --explain`: aynı kaynak snapshot'ından kısa kod alıntıları, gerekçeler ve koşullu çözüm örnekleri; HTML/JSON'da açıklama verisi. NCT006 için tanınan Server Action bağlamı ve üç farklı invalidation seçeneği.
+- Açık adlandırılmış sabit yeniden export zincirleri, alias'lar ve yerel import/export listeleri; her adım için kanıt. Döngü/çakışma/kapsam dışı kaynak ve 64 adım sınırı belirsiz sonuç verir. `export *`, default/namespace export ve wrapper desteği bu kapsamda yok.
+- `init [dizin] [--dry-run]`: mevcut girişleri koruyarak config ve `cache:check` hazırlama. Bağımlılık kurmaz, baseline kabul etmez.
+- `doctor`: kurulu Next sürümü, yapılandırma, tarama kapsamı ve çözümsüzlük kontrolü. Uygulama kodunu çalıştırmaz; audit hata eşiğinin yerini almaz.
+- Rapor şeması 0.4; eski baseline incelenerek yeniden oluşturulmalı. İki paket için hedef 0.3.0, changelog durumu Unreleased. npm yayını ve hosted CI doğrulaması ayrı adımlar.
+
+Yeni bağlam/profil kuralları, PR etkisi, watch ve monorepo sonraki aşamaya bırakıldı. Ayrıntılı doğrulama kaydı `maintainers/validation-0.3.0.md` dosyasında tutulur. Aşağıdaki 0.1/0.2 karşılaştırmaları önceki planın tarihsel kaydıdır; tamamlanmış işleri yeniden yapılacak iş olarak değerlendirmeyin.
 
 20 Eylül 2026 — karşılaştırma sonrası revizyon. Durum: 0.2.0 adayı yerel olarak uygulanıp doğrulandı; hosted CI, npm yayını ve bağımsız pilot beklemede. İlk yol haritası ile kullanıcının ilettiği Claude planı karşılaştırıldı; teknik iddialar kaynak kodu ve güncel resmî belgelerden kontrol edildi. Süreler tek geliştirici için odaklı iş günü tahminidir; yayın taahhüdü değildir.
 
@@ -73,7 +85,7 @@ Claude planındaki “en çok şikâyet edilen”, “1 numaralı neden” ve ra
 | --- | --- | --- | --- |
 | **0.1.1, gerekirse** | Kurulum ve yayın belgeleri düzeltilir; uyumlu bakım düzeltmeleri hızlı çıkar. | 1–2 gün | 0.2.0 yakınsa ayrıca yayınlanması şart değil |
 | **0.2.0** | Sabit ve doğrudan import edilen tag'ler anlaşılır; kanıt, baseline ve Markdown raporuyla CI'a geçiş kolaylaşır. | 12–18 gün | Sonraki esas sürüm |
-| **0.3.0** | Sürüm/bağlam/profil kontrolleri, sınırlı yeniden export çözümleme ve açıklama görünümü derinleşir. | 8–12 gün | 0.2.0 geri bildirimiyle kesinleştirilir |
+| **0.3.0** | Örnekli açıklamalar, adlandırılmış sabit yeniden export desteği, init/doctor. | Yerel uygulama tamamlandı | Yayın öncesi doğrulama/pilot |
 | **0.4.0** | Sınırlı yardımcı fonksiyon/route izleme, hızlı tekrar analiz ve çok uygulamalı çalışma gelişir. | 10–15 gün | Pilot sonucuna bağlı |
 | **1.0.0** | Kararlı kullanım sözleşmesi ve doğrulanmış günlük kullanım. | Ölçütlere bağlı | Sürüm numarası hedefi değil, kararlılık kararı |
 
@@ -133,17 +145,18 @@ Tamamlanma ölçütleri:
 - Baseline sonrası aynı taramada yeni bulgu sıfırdır; özdeş ikinci hata eklenirse bir yeni bulgu çıkar. Üretici silinmesi, tüketici dosyası değişmese de yeni bulgu oluşturur.
 - Tamamı tag'li `fetch` kullanan ve boundary içermeyen geçerli proje, genel cache-kullanımı beklentisini sağlar. Gerçekten boş kapsam beklentiyi sağlamaz.
 
-### 0.3.0 — Sürüme uygun kontroller ve açıklama
+### 0.3.0 — Açıklama, adlandırılmış yeniden export ve kurulum
 
-- **Yeniden export:** Adlandırılmış barrel zincirleri, ardından sınırlandırılmış `export *` çözümleme. Çakışma/döngü/derinlik bütçesi aşımı belirsiz sonuç verir. `analyzeSource` dosya içi API olarak kalır; proje çözümlemesi ikinci geçiştedir.
-- **Next.js sürüm farkındalığı:** Uygulamanın kurulu sürümünü çalıştırmadan oku; sürüm aralığını kesin kurulu sürüm gibi sunma. Bulunamayan veya destek dışı sürümü belirt. İlk hedef 16.x olarak kalır.
-- **Bağlam kuralı:** Örneğin Route Handler gövdesindeki doğrudan `updateTag` kullanımını yakala. Genel yardımcı fonksiyonların çağrı bağlamı bilinmiyorsa kesin hata verme.
-- **Profil kontrolü:** Statik olarak bilinen `cacheLife` değerlerinin çelişkilerini ve tamamen çözülen yapılandırmada bulunmayan özel profil adlarını tespit et. Dinamik config'ten profil yokluğu sonucu çıkarma.
-- Bulgu yardımında kullanılan API'nin etkisini, ilgili resmî belgeyi ve kullanıcıdan beklenen kararı göster. Yeni kuralları önce isteğe bağlı sun; mevcut CI davranışını değiştiren varsayılanları sürüm notunda açıkla.
+- **Yeniden export:** Açık adlandırılmış sabit zincirleri ve import/export listeleri uygulanır. Çakışma/döngü/derinlik bütçesi aşımı belirsiz sonuç verir. `analyzeSource` dosya içi API olarak kalır; kapsamlı çözümleme proje snapshot'ını kullanır.
+- **Next.js sürüm farkındalığı:** `doctor` kurulu sürümü çalıştırmadan okur; sürüm aralığını kesin kurulu sürüm gibi sunmaz. Bulunamayan veya destek dışı sürümü belirtir. İlk hedef 16.x olarak kalır; yeni sürüme özel kurallar eklenmez.
+- **Açıklama:** Kod alıntıları, gerekçeler, çözüm adımları ve koşullu örnekler; audit eşiği ve kural varsayılanları değişmez.
+- **Kurulum:** `init` yalnız eksik config/script girişlerini ekler; tekrar çalıştırılabilir ve kuru çalışma sunar.
+
+Önceki plandaki doğrudan `updateTag` bağlam kuralı, `cacheLife` profil kontrolleri ve `export *` desteği bu sürümden sonraya ertelendi. Genel yardımcı fonksiyonların çağrı bağlamı bilinmiyorsa kesin hata verilmemeli; dinamik config'ten profil yokluğu çıkarılmamalı.
 
 Yeni kural ID'leri uygulama sırasında tek bir kayıt tablosunda atanır. Sadece `RULES` içine eklemek yeterli değildir: kuralın config/proje bilgisine ihtiyacı, ESLint recommended/project preset'i ve dosya içi kapsamı ayrı doğrulanır. Özellikle proje bilgisi isteyen kurallar dosya içi preset'e otomatik açılmaz.
 
-Tamamlanma ölçütü: geçerli Server Action, varsayılan profil, dinamik config ve izinli sayfa cache örnekleri yanlış hata üretmez. Geçersiz profil/bağlam örnekleri ilgili Next sürümünün build veya istek senaryosuyla doğrulanır. Pilotlarda mevcut build/ESLint'e ek fayda kaydedilir.
+Tamamlanma ölçütü: açıklamalar doğru snapshot'ı gösterir, init mevcut kullanıcı ayarlarını korur, adlandırılmış export kanıtı CLI/ESLint'te tutarlıdır ve değişen kaynakta yenilenir. Dış testbed'de yeni barrel ilişkisinin çözüldüğü ve sağlıklı uygulamanın sonucu değişmediği doğrulanır. Pilotlarda bulguyu anlama/düzeltme süresi ayrıca ölçülür.
 
 **İsteğe bağlı geçiş raporu:** En az iki pilotta gerçek ihtiyaç görülürse `migrate` komutu eklenir; yalnız geçiş adaylarını ve kararları raporlar. Sürümü geciktirecekse sonraki minor'a taşınır. [Resmî geçiş rehberi](https://nextjs.org/docs/app/guides/migrating-to-cache-components)
 

@@ -39,3 +39,20 @@ test('explicit ESLint cacheComponents override enables configuration diagnostics
   const messages=lint(cacheImports+"async function a(){'use cache';cacheLife('hours');}",{cacheComponents:false},'app/x.ts','project');
   assert.ok(messages.some(m=>m.ruleId==='next-cache-trace/NCT004'));
 });
+
+test('ESLint project mode follows named barrels and refreshes after a re-export changes', async t => {
+  const text = cacheImports + "import {TAG} from '../lib'; updateTag(TAG);";
+  const root = await fixture(t, {
+    'next.config.ts':'export default {cacheComponents:true}',
+    'tags.ts':"export const POSTS='posts'; export const OTHER='other';",
+    'lib/index.ts':"export {POSTS as TAG} from '../tags';",
+    'app/data.ts':cacheImports + "cacheTag('posts');",
+    'app/action.ts':text
+  });
+  const filename = join(root, 'app/action.ts');
+  assert.equal(lint(text, {projectRoot:root}, filename, 'project', root).length, 0);
+  await writeFile(join(root, 'lib/index.ts'), "export {OTHER as TAG} from '../tags';");
+  const messages = lint(text, {projectRoot:root}, filename, 'project', root);
+  assert.equal(messages.length, 1, JSON.stringify(messages));
+  assert.equal(messages[0].ruleId, 'next-cache-trace/NCT001');
+});

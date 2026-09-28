@@ -1,6 +1,6 @@
 {
   "name": "next-cache-trace",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "repository": { "type": "git", "url": "git+https://github.com/taneruzum/next-cache-trace.git" },
   "homepage": "https://github.com/taneruzum/next-cache-trace#readme",
   "bugs": { "url": "https://github.com/taneruzum/next-cache-trace/issues" },

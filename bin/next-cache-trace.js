@@ -2,11 +2,14 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, extname, resolve } from 'node:path';
 import { analyzeProject, formatHtml, formatJson, formatSarif, formatText, formatMarkdown, explainTag, createBaseline, applyBaseline, RULES } from '../dist/index.js';
+import { initialize, diagnose, formatDoctor } from './setup.js';
 
 const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const HELP = [
   'next-cache-trace ' + version,
   'Usage: next-cache-trace audit [directory] [options]',
+  '       next-cache-trace init [directory] [--dry-run]',
+  '       next-cache-trace doctor [directory] [--format text|json] [--config <file>]',
   '',
   '  --format text|json|sarif|html|markdown  Default: text',
   '  --output <file>              Write report; refuses to overwrite unless --force',
@@ -20,11 +23,37 @@ const HELP = [
   '  --min-files <n>             Require at least n source files (exit 2 if unmet)',
   '  --require-cache-usage       Require supported cache usage (exit 2 if absent)',
   '  --tag <literal>             Explain a tag (text only; CI uses the full report)',
+  '  --explain                   Source excerpts and solution examples (text/markdown)',
+  '  init                        Add config and cache:check; preserve existing entries',
+  '  --dry-run                   Preview init without changing files',
+  '  doctor                      Check setup and scope; exit 2 for setup errors',
   '  --help, -h                   Show help',
   '  --version, -v                Show version',
 ].join('\n');
 
 function parse(args) {
+  if (['init', 'doctor'].includes(args[0])) {
+    const command = args[0];
+    const setup = { command, directory: '.', dryRun: false, format: 'text', trace: {} };
+    const positional = [];
+    for (let i = 1; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '--help' || arg === '-h') return { help: true };
+      if (arg === '--') { positional.push(...args.slice(i + 1)); break; }
+      if (arg === '--dry-run' && command === 'init') { setup.dryRun = true; continue; }
+      if (command === 'doctor' && ['--format', '--config'].includes(arg)) {
+        const value = args[++i];
+        if (!value || value.startsWith('-')) throw new Error('Missing value for ' + arg);
+        if (arg === '--format') setup.format = value;
+        else setup.trace.config = value;
+      } else if (arg.startsWith('-')) throw new Error('Unknown option for ' + command + ': ' + arg);
+      else positional.push(arg);
+    }
+    if (positional.length > 1) throw new Error('Supply only one project directory');
+    if (!['text', 'json'].includes(setup.format)) throw new Error('Doctor format must be text or json');
+    setup.directory = positional[0] ?? '.';
+    return setup;
+  }
   const options = { directory: '.', format: 'text', failOn: 'error', output: null, force: false, trace: { exclude: [], rules: {} } };
   const values = new Set(['--format', '-f', '--output', '-o', '--fail-on', '--config', '--exclude', '--ignore-rule', '--baseline', '--min-files', '--tag']);
   const positional = [];
@@ -34,6 +63,7 @@ function parse(args) {
     if (arg === '--help' || arg === '-h') return { help: true };
     if (arg === '--version' || arg === '-v') return { version: true };
     if (arg === '--force') { options.force = true; continue; }
+    if (arg === '--explain') { options.explain = true; continue; }
     if (arg === '--update-baseline') { options.updateBaseline = true; continue; }
     if (arg === '--require-cache-usage') { options.trace.requireCacheUsage = true; continue; }
     if (arg === '--') { positional.push(...args.slice(i + 1)); break; }
@@ -63,6 +93,7 @@ function parse(args) {
   if (!['text', 'json', 'sarif', 'html', 'markdown'].includes(options.format)) throw new Error('Invalid report format');
   if (options.updateBaseline && !options.baseline) throw new Error('--update-baseline requires --baseline <file>');
   if (options.tag !== undefined && options.format !== 'text') throw new Error('--tag requires text format');
+  if (options.explain && (!['text', 'markdown'].includes(options.format) || options.tag !== undefined)) throw new Error('--explain requires text/markdown format and cannot be combined with --tag');
   if (!['error', 'warning', 'none'].includes(options.failOn)) throw new Error('Invalid fail-on threshold');
   if (!options.trace.exclude.length) delete options.trace.exclude;
   return options;
@@ -71,6 +102,12 @@ try {
   const options = parse(process.argv.slice(2));
   if (options.help) process.stdout.write(HELP + '\n');
   else if (options.version) process.stdout.write(version + '\n');
+  else if (options.command === 'init') process.stdout.write(await initialize(options.directory, options.dryRun) + '\n');
+  else if (options.command === 'doctor') {
+    const report = await diagnose(options.directory, options.trace);
+    process.stdout.write((options.format === 'json' ? JSON.stringify(report, null, 2) : formatDoctor(report)) + '\n');
+    if (!report.ok) process.exitCode = 2;
+  }
   else {
     let report = await analyzeProject(resolve(options.directory), options.trace);
     if (options.baseline) {
@@ -92,7 +129,7 @@ try {
       } else report = applyBaseline(report, JSON.parse(await readFile(baselinePath, 'utf8')));
     }
     const formatters = { text: formatText, json: formatJson, sarif: formatSarif, html: formatHtml, markdown: formatMarkdown };
-    const rendered = (options.tag !== undefined ? explainTag(report, options.tag) : formatters[options.format](report)) + '\n';
+    const rendered = (options.tag !== undefined ? explainTag(report, options.tag) : formatters[options.format](report, { explain: options.explain })) + '\n';
     if (options.output) {
       const target = resolve(options.output);
       if (['.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.mts', '.cts'].includes(extname(target).toLowerCase())) throw new Error('Refusing to write a report to a source-code file');
