@@ -7,6 +7,7 @@ import { readCacheConfig, readModuleOptions, readOptions } from './config.js';
 import { RULES, finding, type CacheConfig, type FileAnalysis, type Finding, type Report, type TraceOptions } from './model.js';
 import { SourceContext } from './resolver.js';
 import { digest, identifyFindings } from './identity.js';
+import { explainFinding } from './guidance.js';
 
 const EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts']);
 const IGNORE_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'out', '.turbo', '.vercel', '__tests__', '__fixtures__']);
@@ -79,14 +80,14 @@ export function buildReport(root: string, files: FileAnalysis[], sources: Map<st
     const level = options.rules?.[item.code];
     if (RULES[item.code].optIn && level === undefined) continue;
     if (level === 'off' || suppress.get(item.file)?.get(item.line)?.has(item.code)) { suppressedCount++; continue; }
-    visible.push({ ...item, severity: level ?? item.severity });
+    visible.push({ ...item, severity: level ?? item.severity, explanation: item.explanation ?? explainFinding(item, sources.get(item.file) ?? '') });
   }
   const order = { error: 0, warning: 1, info: 2 };
   visible.sort((a, b) => order[a.severity] - order[b.severity] || a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column || a.code.localeCompare(b.code));
   const summary = { error: 0, warning: 0, info: 0 };
   for (const item of visible) summary[item.severity]++;
   return {
-    schemaVersion: '0.3', projectRoot: root, config, filesScanned: files.length, summary, findings: identifyFindings(visible, sources), suppressedCount,
+    schemaVersion: '0.4', projectRoot: root, config, filesScanned: files.length, summary, findings: identifyFindings(visible, sources), suppressedCount,
     analysisSignature: digest(JSON.stringify({ config: config.enabled, include: [...(options.include ?? ['**/*'])].sort(), exclude: [...(options.exclude ?? [])].sort(),
       rules: Object.entries(options.rules ?? {}).sort(([a], [b]) => a.localeCompare(b)), minFiles: options.minFiles ?? 0, requireCacheUsage: options.requireCacheUsage ?? false })),
     graph: { producers, invalidations, boundaries },
@@ -94,7 +95,7 @@ export function buildReport(root: string, files: FileAnalysis[], sources: Map<st
       resolvedProducers: producers.filter(p => p.resolution === 'resolved').length, resolvedInvalidations: invalidations.filter(p => p.resolution === 'resolved').length,
       cacheUsages: files.reduce((n, file) => n + file.cacheUsages.length + file.boundaries.length, 0), parseErrors: findings.filter(x => x.code === 'NCT902').length,
       unresolved: findings.filter(x => ['NCT900', 'NCT901', 'NCT902'].includes(x.code)).length,
-      note: 'Static evidence only. No findings does not prove cache correctness. Indirect helpers, re-exports, runtime behavior and excluded files are not resolved.' }
+      note: 'Static evidence only. No findings does not prove cache correctness. Indirect helpers, wildcard/default/namespace exports, runtime behavior and excluded files are not resolved.' }
   };
 }
 

@@ -20,10 +20,17 @@ try {
   assert.ok(!core.files.some(f=>f.path.startsWith('tests/') || f.path.startsWith('node_modules/')));
   assert.ok(!core.files.some(f=>f.path.startsWith('maintainers/')));
   const manifest=JSON.parse(await readFile(join(root,'package.json'),'utf8'));
-  assert.equal(manifest.version,'0.2.0');
+  assert.equal(manifest.version,'0.3.0');
   const pluginManifest=JSON.parse(await readFile(join(root,'packages/eslint-plugin/package.json'),'utf8'));
-  assert.equal(pluginManifest.version,'0.2.0');
-  assert.equal(pluginManifest.peerDependencies['next-cache-trace'],'^0.2.0');
+  assert.equal(pluginManifest.version,manifest.version);
+  assert.equal(pluginManifest.peerDependencies['next-cache-trace'],'^0.3.0');
+  const lock=JSON.parse(await readFile(join(root,'package-lock.json'),'utf8'));
+  assert.equal(lock.version,manifest.version);
+  assert.equal(lock.packages[''].version,manifest.version);
+  assert.equal(lock.packages['packages/eslint-plugin'].version,pluginManifest.version);
+  assert.equal(lock.packages['packages/eslint-plugin'].peerDependencies['next-cache-trace'],pluginManifest.peerDependencies['next-cache-trace']);
+  assert.ok(core.files.some(f=>f.path==='bin/setup.js'));
+  assert.ok(core.files.some(f=>f.path==='dist/guidance.js'));
   await writeFile(join(temp,'package.json'),JSON.stringify({private:true,type:'module'}));
   command(['install','--ignore-scripts','--no-audit','--no-fund',join(temp,core.filename),join(temp,plugin.filename),'eslint@'+manifest.devDependencies.eslint]);
   await mkdir(join(temp,'app'));
@@ -34,6 +41,17 @@ try {
   assert.equal(JSON.parse(cli.stdout).summary.warning,1);
   const viaBin=JSON.parse(command(['exec','--offline','--','next-cache-trace','audit',temp,'--format','json']));
   assert.equal(viaBin.summary.warning,1);
+  assert.equal(viaBin.schemaVersion,'0.4');
+  assert.ok(viaBin.findings[0].explanation.source.length);
+  // Exercise new commands from the installed tarball, with no Next runtime needed.
+  const consumerManifest=JSON.parse(await readFile(join(temp,'package.json'),'utf8'));
+  consumerManifest.devDependencies={next:'^16.0.0'};
+  await writeFile(join(temp,'package.json'),JSON.stringify(consumerManifest));
+  for (const args of [['init',temp,'--dry-run'],['init',temp],['doctor',temp,'--format','json'],['audit',temp,'--explain']]) {
+    const result=spawnSync(process.execPath,[installed,...args],{encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr);
+    if(args[0]==='doctor') assert.equal(JSON.parse(result.stdout).ok,true);
+  }
   const consumerTypes=join(temp,'consumer.ts');
   await writeFile(consumerTypes,"import {analyzeProject, type Report} from 'next-cache-trace'; const report: Promise<Report> = analyzeProject('.'); void report;");
   const typecheck=spawnSync(process.execPath,[join(temp,'node_modules','typescript','bin','tsc'),'--noEmit','--skipLibCheck','--module','NodeNext','--target','ES2022',consumerTypes],{cwd:temp,encoding:'utf8'});
@@ -41,5 +59,5 @@ try {
   // Resolve both public exports from a fresh consumer, not the development source tree.
   const check=spawnSync(process.execPath,['--input-type=module','-e',"import {analyzeProject} from 'next-cache-trace'; import plugin from 'eslint-plugin-next-cache-trace'; import {Linter} from 'eslint'; if(typeof analyzeProject!=='function')process.exit(1); const l=new Linter(); const messages=l.verify(\"import {cookies} from 'next/headers'; async function a(){'use cache';cookies();}\",[plugin.configs.recommended]); if(!messages.some(m=>m.ruleId==='next-cache-trace/NCT002'))process.exit(2);"],{cwd:temp,encoding:'utf8'});
   assert.equal(check.status,0,check.stderr);
-  console.log('Clean consumer smoke passed: main tarball, TypeScript consumer, installed bin, CLI, plugin export and ESLint rule.');
+  console.log('Clean consumer smoke passed: matching manifests/lockfile, TypeScript consumer, installed audit/explain/init/doctor, plugin export and ESLint rule.');
 } finally { await rm(temp,{recursive:true,force:true}); }

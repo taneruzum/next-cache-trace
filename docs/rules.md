@@ -13,13 +13,15 @@ All source locations use 1-based line and column numbers. Rules analyze direct s
 | NCT007 | Decoded observed tag longer than 256 UTF-16 code units | Applies to cacheTag, fetch next.tags, unstable_cache tags, revalidateTag and updateTag. Exactly 256 is allowed. Supported constants are resolved; runtime expressions and concatenations are not evaluated. |
 | NCT008 | More than 128 observed, valid-length strings in a single cacheTag call or fetch/unstable_cache tags array | Exactly 128 is allowed. Fully resolved array spreads are counted. Unresolved entries, expansion limits and overlength tags skip this count check; NCT900/NCT007 still describe those limits. Separate calls are not summed. |
 | NCT009 | Direct revalidateTag(tag, 'max') in an explicitly recognized Server Action | Off by default. This is valid SWR behavior. Consider updateTag only when read-your-own-writes is required. No automatic fix. |
-| NCT900 | Dynamic tags or opaque cache option objects | Relationship unknown. Literals, supported const bindings, object/array fields and direct named imports are resolved. Re-exports, wrappers, mutable containers and runtime expressions remain unresolved. |
+| NCT900 | Dynamic tags or opaque cache option objects | Relationship unknown. Literals, supported const bindings, object/array fields, named imports and explicit named constant re-exports are resolved. Wildcard/default/namespace exports, wrappers, mutable containers and runtime expressions remain unresolved. |
 | NCT901 | Config uses a function/plugin wrapper, unknown spread, environment expression or mutation | Inspect manually, or supply the analyzer's cacheComponents override. |
 | NCT902 | TypeScript parser diagnostic | Resolve the syntax problem before trusting the scan. |
 
 Disable a CLI finding with `// next-cache-trace-disable-next-line NCT001 -- reason` immediately before its reported line. Multiple codes may be separated by spaces or commas. Disable/adjust a rule globally through the JSON config's `rules` object. ESLint also supports its standard disable comments.
 
 The graph retains suppressed relationships. Report coverage retains unresolved counts and parse errors even if their diagnostic rule is disabled. A baseline cannot be created while parse errors are present.
+
+Use `audit . --explain` (text or Markdown) for source excerpts, reasons and conditional solution examples. The excerpts come from the same analyzed snapshot, including the current ESLint buffer in project mode. HTML includes expandable guidance and JSON exposes `finding.explanation`. Examples are illustrative and do not change source or CI thresholds. NCT006 identifies recognized Server Actions; unknown helpers are not assumed to be invalid callers.
 
 The analyzer does not resolve runtime call graphs or arbitrary imported wrappers; consult the README's analysis boundaries before interpreting a clean report.
 

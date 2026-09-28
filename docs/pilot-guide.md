@@ -7,7 +7,7 @@ The intended user is a team with Next.js 16 App Router cache code: literal cache
 From your Next.js app, install the registry release:
 
 ```sh
-npm install --save-dev next-cache-trace@0.2.0
+npm install --save-dev next-cache-trace@0.3.0
 npx --no-install next-cache-trace audit . --fail-on none
 ```
 
@@ -24,12 +24,18 @@ npm pack --pack-destination artifacts
 From your Next.js app, substitute the actual absolute tarball path:
 
 ```sh
-npm install --save-dev /absolute/path/to/next-cache-trace/artifacts/next-cache-trace-0.2.0.tgz
+npm install --save-dev /absolute/path/to/next-cache-trace/artifacts/next-cache-trace-0.3.0.tgz
+npx --no-install next-cache-trace init . --dry-run
+npx --no-install next-cache-trace init .
+npx --no-install next-cache-trace doctor .
+npx --no-install next-cache-trace audit . --explain --fail-on none
 npx --no-install next-cache-trace audit . --fail-on none
 npx --no-install next-cache-trace audit . --format html --output artifacts/cache.html
 ```
 
 Quote paths containing spaces in PowerShell. Installing changes the app's package.json and lockfile; do it on a review branch. Alternatively, run `node /absolute/path/to/next-cache-trace/bin/next-cache-trace.js audit /absolute/path/to/app --fail-on none` without installing anything in the app. Scanning does not execute or edit app source. Existing report files require `--force` to replace.
+
+`init` adds only missing config/script entries and preserves existing ones. It does not install dependencies or accept findings. Doctor is read-only and reports the installed Next version separately from a declared dependency range. Audit explanations show code excerpts and conditional examples without applying fixes. After upgrading from report schema 0.3, review and regenerate the baseline for schema 0.4.
 
 Do not commit an absolute `file:` dependency as a portable production setup. Replace a local pilot dependency with the corresponding pinned registry release once available.
 

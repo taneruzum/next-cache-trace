@@ -91,7 +91,7 @@ test('writes from an importing file invalidate object evidence in all files', as
   assert.ok(r.findings.some(f=>f.code==='NCT900'));
 });
 
-test('re-exports, excluded sources and type-only imports never become proven producers', async t => {
+test('named re-exports resolve while excluded sources and type-only imports do not', async t => {
   const root = await fixture(t, {
     'tags.ts':"export const TAG='posts';",
     'barrel.ts':"export {TAG} from './tags';",
@@ -99,11 +99,72 @@ test('re-exports, excluded sources and type-only imports never become proven pro
     'b.ts':cacheImports+"import type {TAG} from './tags'; updateTag(TAG);"
   });
   const r=await analyzeProject(root);
-  assert.equal(r.graph.producers.length+r.graph.invalidations.length,0);
-  assert.equal(r.findings.filter(f=>f.code==='NCT900').length,2);
+  assert.deepEqual(r.graph.producers.map(p => p.tag), ['posts']);
+  assert.equal(r.graph.invalidations.length,0);
+  assert.equal(r.findings.filter(f=>f.code==='NCT900').length,1);
   await writeFile(join(root,'a.ts'),cacheImports+"import {TAG} from './tags'; cacheTag(TAG);");
   assert.equal((await analyzeProject(root,{exclude:['tags.ts']})).graph.producers.length,0);
 });
+
+test('named re-export chains preserve aliases, local import/export lists and every evidence hop', async t => {
+  const root = await fixture(t, {
+    'next.config.ts': 'export default {cacheComponents:true}',
+    'tsconfig.json': '{"compilerOptions":{"paths":{"@/*":["./lib/*"]}}}',
+    'lib/tags.ts': "throw new Error('never execute'); export const TAGS={posts:'posts'};",
+    'lib/first.ts': "export {TAGS as DATA} from './tags.js';",
+    'lib/index.ts': "import {DATA as local} from './first'; export {local as PUBLIC};",
+    'app/data.ts': cacheImports + "import {PUBLIC} from '@/index'; cacheTag(PUBLIC.posts);",
+    'app/actions.ts': cacheImports + "import {TAGS} from '../lib/tags'; updateTag(TAGS.posts);"
+  });
+  const report = await analyzeProject(root);
+  assert.equal(report.findings.length, 0, JSON.stringify(report.findings));
+  assert.deepEqual(report.graph.producers[0].evidence.map(e => e.kind), ['usage','import','export','import','export','export','definition','literal']);
+  assert.match(explainTag(report, 'posts'), /lib\/first.ts/);
+  await writeFile(join(root, 'lib/first.ts'), "export {MISSING as DATA} from './tags';");
+  assert.equal((await analyzeProject(root)).graph.producers.length, 0);
+  assert.equal(analyzeProjectSync(root, {}, {'lib/first.ts': "export {TAGS as DATA} from './tags';"}).graph.producers[0].tag, 'posts');
+});
+
+for (const [label, files, reason] of [
+  ['cyclic exports', {'index.ts': "export {TAG} from './other';", 'other.ts': "export {TAG} from './index';"}, /Cyclic named export/],
+  ['wildcard exports', {'index.ts': "export * from './tags';"}, /export \*/],
+  ['type-only exports', {'index.ts': "export type {TAG} from './tags';"}, /type-only/],
+  ['inline type-only exports', {'index.ts': "export {type TAG} from './tags';"}, /type-only/],
+  ['type-only local import', {'index.ts': "import type {TAG} from './tags'; export {TAG};"}, /Type-only/],
+  ['namespace exports', {'index.ts': "export * as TAG from './tags';"}, /namespace/],
+  ['default exports', {'index.ts': "export {default as TAG} from './tags';", 'tags.ts': "export default 'posts';"}, /Default exports/],
+  ['conflicting explicit exports', {'index.ts': "export {TAG} from './tags'; export {TAG} from './other';", 'other.ts': "export const TAG='other';"}, /Multiple explicit exports/],
+  ['missing source', {'index.ts': "export {TAG} from './missing';"}, /outside the scanned/],
+  ['broken source', {'index.ts': "export {TAG} from './tags';", 'tags.ts': "export const TAG='posts'; const = ;"}, /syntax errors/]
+]) test('named export resolution remains unknown for ' + label, async t => {
+  const root = await fixture(t, {'tags.ts': "export const TAG='posts';", ...files, 'app/data.ts': cacheImports + "import {TAG} from '../index'; cacheTag(TAG);"});
+  const report = await analyzeProject(root);
+  assert.equal(report.graph.producers.length, 0);
+  assert.ok(report.findings.some(f => f.code === 'NCT900' && reason.test(f.message)), JSON.stringify(report.findings));
+});
+
+test('named export depth is bounded and excluded barrels never supply evidence', async t => {
+  const files = {'app/data.ts': cacheImports + "import {TAG} from '../chain0'; cacheTag(TAG);", 'chain65.ts': "export const TAG='posts';"};
+  for (let i = 0; i < 65; i++) files['chain' + i + '.ts'] = `export {TAG} from './chain${i + 1}';`;
+  const root = await fixture(t, files);
+  const report = await analyzeProject(root);
+  assert.equal(report.graph.producers.length, 0);
+  assert.match(report.findings.find(f => f.code === 'NCT900').message, /depth limit/);
+  await writeFile(join(root, 'chain0.ts'), "export {TAG} from './chain65';");
+  assert.equal((await analyzeProject(root, {exclude:['chain65.ts']})).graph.producers.length, 0);
+});
+
+for (const use of ["DATA.posts='changed';", 'mutate(DATA);', 'const alias=DATA; alias.posts="changed";']) {
+  test('mutations and escapes through a barrel invalidate aggregate evidence: ' + use, async t => {
+    const root = await fixture(t, {
+      'tags.ts': "export const TAGS={posts:'posts'};",
+      'index.ts': "export {TAGS as DATA} from './tags';",
+      'writer.ts': "import {DATA} from './index'; " + use,
+      'app/data.ts': cacheImports + "import {TAGS} from '../tags'; cacheTag(TAGS.posts);"
+    });
+    assert.equal((await analyzeProject(root)).graph.producers.length, 0);
+  });
+}
 
 test('nested Next applications are rejected instead of sharing tag evidence', async t => {
   const root=await fixture(t, {'apps/other/next.config.mjs':'export default {}', 'app/a.ts':cacheImports+"updateTag('posts');"});

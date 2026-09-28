@@ -1,9 +1,9 @@
 # eslint-plugin-next-cache-trace
 
-Optional alias for `next-cache-trace/eslint`. Install `next-cache-trace` alongside this package. Version 0.2.0 marks the main peer optional for workspace bootstrapping, but importing this alias requires the main package at runtime.
+Optional alias for `next-cache-trace/eslint`. Install `next-cache-trace` alongside this package. The main peer remains optional for workspace bootstrapping, but importing this alias requires the main package at runtime.
 
 ```bash
-npm install --save-dev next-cache-trace@^0.2.0 eslint-plugin-next-cache-trace@^0.2.0 eslint
+npm install --save-dev next-cache-trace@^0.3.0 eslint-plugin-next-cache-trace@^0.3.0 eslint
 ```
 
 The main package also exposes the same plugin directly as `next-cache-trace/eslint`; this alias is optional.

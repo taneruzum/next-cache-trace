@@ -3,6 +3,7 @@ import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import {
   analyzeProject, analyzeProjectSync, applyBaseline, createBaseline,
   formatHtml, formatJson, formatMarkdown, formatSarif
@@ -114,10 +115,10 @@ console.log('apps/ayaz: every invalidation matched, full evidence chain verified
 const storefront = await analyzeProject(fixture('storefront'));
 
 assert.equal(storefront.filesScanned, 27);
-assert.deepEqual(storefront.summary, { error: 2, warning: 9, info: 23 });
+assert.deepEqual(storefront.summary, { error: 2, warning: 9, info: 22 });
 assert.equal(storefront.suppressedCount, 4);
-assert.deepEqual(counts(storefront), { NCT001: 3, NCT002: 2, NCT003: 3, NCT005: 10, NCT006: 1, NCT007: 2, NCT009: 4, NCT900: 9 });
-assert.deepEqual([storefront.graph.producers.length, storefront.graph.invalidations.length, storefront.graph.boundaries.length], [14, 9, 15]);
+assert.deepEqual(counts(storefront), { NCT001: 3, NCT002: 2, NCT003: 3, NCT005: 10, NCT006: 1, NCT007: 2, NCT009: 4, NCT900: 8 });
+assert.deepEqual([storefront.graph.producers.length, storefront.graph.invalidations.length, storefront.graph.boundaries.length], [15, 9, 15]);
 
 // NCT002: flagged inside shared and remote entries, silent inside a private one.
 assert.deepEqual(sites(storefront, 'NCT002'), ['app/(marketing)/home/data.ts:9', 'app/reports/secure.ts:9']);
@@ -153,7 +154,6 @@ for (const cached of ['app/(shop)/cart/data.ts', 'app/invoices/data.ts']) assert
 assert.deepEqual(new Map(storefront.findings.filter(f => f.code === 'NCT900').map(f => [f.file + ':' + f.line, f.message.split(': ').slice(1).join(': ')])), new Map([
   ['app/(marketing)/home/promo.ts:6', 'Constant is read before its declaration.'],
   ['app/(shop)/collections/data.ts:7', 'Computed property keys are not resolved.'],
-  ['app/(shop)/products/related.ts:7', 'No supported local constant or direct named export in the scanned sources.'],
   ['app/admin/labels.ts:6', 'The constant or one of its aliases is written to.'],
   ['app/admin/labels.ts:7', 'The object/array escapes supported read-only uses; as const is not runtime immutability.'],
   ['app/admin/labels.ts:8', 'Only const declarations with simple names are supported.'],
@@ -166,7 +166,7 @@ assert.deepEqual(new Map(storefront.findings.filter(f => f.code === 'NCT900').ma
 // resolve; excluded files and a shadowed local function never become producers.
 assert.deepEqual(tagCounts(storefront.graph.producers), {
   'admin:audit': 1, 'cart:session': 1, 'invoices:list': 1, 'orders:list': 1,
-  'products:featured': 1, 'products:hidden': 1, 'products:list': 2,
+  'products:featured': 1, 'products:hidden': 1, 'products:list': 3,
   'reports:daily': 1, 'reports:secure': 1, 'shared-menu': 3,
   ['settings-snapshot-' + 'a'.repeat(262)]: 1
 });
@@ -176,19 +176,25 @@ for (const absent of ['mock-only:tag', 'test-only:tag', 'declaration-only:tag', 
 // The namespace import and the aliased import are both recognised as producers.
 assert.ok(storefront.graph.producers.some(p => p.file === 'app/admin/data.ts' && p.tag === 'shared-menu'));
 assert.ok(storefront.graph.producers.some(p => p.file === 'app/admin/data.ts' && p.tag === 'admin:audit'));
-// A local export list resolves, a re-export barrel does not.
+// Both a local export list and a named re-export barrel now resolve.
 assert.equal(storefront.graph.producers.find(p => p.tag === 'invoices:list').resolution, 'resolved');
+const barrelProducer = storefront.graph.producers.find(p => p.file === 'app/(shop)/products/related.ts');
+assert.equal(barrelProducer.tag, 'products:list');
+assert.deepEqual(barrelProducer.evidence.map(step => step.kind), ['usage', 'import', 'export', 'export', 'definition', 'literal']);
+assert.equal(barrelProducer.evidence[2].file, 'lib/tags-barrel.ts');
+assert.equal(barrelProducer.evidence.at(-1).file, 'lib/tags.ts');
+assert.ok(!sites(storefront, 'NCT900').some(site => site.startsWith('app/(shop)/products/related.ts')));
 // One partially resolved call: the scalar read survives, the spread does not.
 assert.ok(storefront.graph.producers.some(p => p.file === 'app/orders/data.ts' && p.tag === 'orders:list'));
 assert.ok(!storefront.graph.producers.some(p => p.file === 'app/orders/data.ts' && p.tag === 'products:list'));
 
 assert.deepEqual(
   [storefront.coverage.literalProducers, storefront.coverage.resolvedProducers, storefront.coverage.literalInvalidations, storefront.coverage.resolvedInvalidations],
-  [4, 10, 5, 4]
+  [4, 11, 5, 4]
 );
 assert.equal(storefront.coverage.parseErrors, 0);
 
-console.log('fixtures/storefront: 27 files, 2 errors, 9 warnings, 23 info, 4 suppressed; nine distinct resolver outcomes verified.');
+console.log('fixtures/storefront: 27 files, 2 errors, 9 warnings, 22 info, 4 suppressed; named barrel evidence and eight unresolved outcomes verified.');
 
 /* ---- configuration overrides change exactly what they claim to ---- */
 
@@ -196,7 +202,7 @@ console.log('fixtures/storefront: 27 files, 2 errors, 9 warnings, 23 info, 4 sup
 // unstable_cache and fetch options are usages but not directive sites, so
 // app/orders/data.ts and app/reports/data.ts stay out.
 const disabled = await analyzeProject(fixture('storefront'), { cacheComponents: false });
-assert.deepEqual(disabled.summary, { error: 15, warning: 9, info: 23 });
+assert.deepEqual(disabled.summary, { error: 15, warning: 9, info: 22 });
 assert.equal(sites(disabled, 'NCT004').length, 13);
 for (const quiet of ['app/orders/data.ts', 'app/reports/data.ts', 'app/layout.tsx']) {
   assert.ok(!sites(disabled, 'NCT004').some(s => s.startsWith(quiet)), quiet + ' has no directive site');
@@ -204,18 +210,18 @@ for (const quiet of ['app/orders/data.ts', 'app/reports/data.ts', 'app/layout.ts
 
 // Switching a rule off suppresses exactly its own findings and nothing else.
 const withoutAdvisory = await analyzeProject(fixture('storefront'), { rules: { NCT009: 'off' } });
-assert.deepEqual(withoutAdvisory.summary, { error: 2, warning: 9, info: 19 });
+assert.deepEqual(withoutAdvisory.summary, { error: 2, warning: 9, info: 18 });
 assert.equal(withoutAdvisory.suppressedCount, 8);
 const withoutUnresolved = await analyzeProject(fixture('storefront'), { rules: { NCT900: 'off' } });
 assert.deepEqual(withoutUnresolved.summary, { error: 2, warning: 9, info: 14 });
-assert.equal(withoutUnresolved.suppressedCount, 13);
+assert.equal(withoutUnresolved.suppressedCount, 12);
 
 // Excluding a route area removes its files, and the cross-file rules recompute:
 // "shared-menu" now spans two areas instead of three, and the typo that pointed
 // at it disappears with the file that contained it.
 const narrowed = await analyzeProject(fixture('storefront'), { exclude: ['app/admin/**'] });
 assert.equal(narrowed.filesScanned, 24);
-assert.deepEqual(narrowed.summary, { error: 2, warning: 7, info: 17 });
+assert.deepEqual(narrowed.summary, { error: 2, warning: 7, info: 16 });
 assert.deepEqual(sites(narrowed, 'NCT003'), ['app/(marketing)/home/data.ts:7', 'app/(shop)/products/data.ts:8']);
 assert.ok(narrowed.findings.filter(f => f.code === 'NCT003').every(f => f.message.includes('route areas home, products;')));
 assert.equal(tagCounts(narrowed.graph.producers)['shared-menu'], 2);
@@ -319,13 +325,28 @@ console.log('fixtures/nested-guard: a nested application is refused, and the inn
 /* 8. the testbed is read-only, and the reports render                 */
 /* ================================================================== */
 
+const cli = join(packageRoot, 'bin', 'next-cache-trace.js');
+const doctor = spawnSync(process.execPath, [cli, 'doctor', app, '--format', 'json'], { encoding: 'utf8', timeout: 30000 });
+assert.equal(doctor.status, 0, doctor.stderr);
+assert.equal(JSON.parse(doctor.stdout).scan.files, 15);
+assert.equal(JSON.parse(doctor.stdout).scan.unresolved, 3);
+const preview = spawnSync(process.execPath, [cli, 'init', app, '--dry-run'], { encoding: 'utf8', timeout: 30000 });
+assert.equal(preview.status, 0, preview.stderr);
+assert.match(preview.stdout, /Dry run/);
+const explained = spawnSync(process.execPath, [cli, 'audit', fixture('storefront'), '--explain', '--fail-on', 'none'], { encoding: 'utf8', timeout: 30000 });
+assert.equal(explained.status, 0, explained.stderr);
+assert.match(explained.stdout, /expire: 0/);
+assert.match(explained.stdout, /Caller: recognized Server Action/);
+assert.ok(storefront.findings.every(item => item.explanation?.source.length));
+console.log('New CLI flows: doctor coverage, init dry-run and source-backed explanations verified.');
+
 assert.deepEqual(await hashes(testbed), before, 'Testbed sources must remain unchanged');
 
 const out = join(packageRoot, 'artifacts');
 await mkdir(out, { recursive: true });
 for (const [name, report] of [['ayaz', ayaz], ['storefront', storefront]]) {
   for (const [extension, formatter] of [['json', formatJson], ['html', formatHtml], ['sarif', formatSarif], ['md', formatMarkdown]]) {
-    const rendered = formatter(report);
+    const rendered = formatter(report, { explain: true });
     assert.ok(rendered.length > 0);
     if (extension === 'sarif') JSON.parse(rendered);
     if (extension === 'html') assert.ok(!/<script/i.test(rendered), 'HTML reports must never contain script tags');

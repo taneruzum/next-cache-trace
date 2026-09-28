@@ -3,13 +3,14 @@ import { pathToFileURL } from 'node:url';
 import { resolve, sep } from 'node:path';
 import { RULES, type Report, type TagSite } from './model.js';
 import { VERSION } from './version.js';
+import { formatFindingExplanation } from './guidance.js';
 
 const escapeHtml = (value: unknown): string => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 export function formatJson(report: Report): string { return JSON.stringify(report, null, 2); }
-export function formatText(report: Report): string {
+export function formatText(report: Report, options: { explain?: boolean } = {}): string {
   const lines = ['next-cache-trace — ' + report.filesScanned + ' source file(s)', ''];
   if (!report.findings.length) lines.push('No findings within the analyzed scope.');
-  for (const f of report.findings) lines.push('[' + f.severity + (f.baselineState ? '/' + f.baselineState : '') + '] ' + f.code + ' ' + f.file + ':' + f.line + ':' + f.column, '  ' + f.message, '  ' + f.help);
+  for (const f of report.findings) lines.push('[' + f.severity + (f.baselineState ? '/' + f.baselineState : '') + '] ' + f.code + ' ' + f.file + ':' + f.line + ':' + f.column, '  ' + f.message, '  ' + (options.explain ? formatFindingExplanation(f).replaceAll('\n', '\n  ') : f.help));
   lines.push('', report.summary.error + ' error(s), ' + report.summary.warning + ' warning(s), ' + report.summary.info + ' info, ' + report.suppressedCount + ' suppressed',
     'Graph: ' + report.graph.producers.length + ' observed producer(s), ' + report.graph.invalidations.length + ' invalidation(s), ' + report.graph.boundaries.length + ' cached boundary/boundaries.',
     'Coverage: ' + report.coverage.cacheUsages + ' cache usage(s), ' + (report.coverage.resolvedProducers + report.coverage.resolvedInvalidations) + ' constant-resolved tag site(s), ' + report.coverage.unresolved + ' unresolved diagnostic(s).',
@@ -33,7 +34,7 @@ export function explainTag(report: Report, tag: string): string {
 }
 
 const markdown = (value: string): string => escapeHtml(value).replace(/([\\`*_{}\[\]()#+!|~])/g, '\\$1').replace(/[\r\n]+/g, ' ');
-export function formatMarkdown(report: Report): string {
+export function formatMarkdown(report: Report, options: { explain?: boolean } = {}): string {
   const lines = ['# next-cache-trace', '', `${report.filesScanned} files; ${report.summary.error} errors, ${report.summary.warning} warnings, ${report.summary.info} informational findings.`, ''];
   if (report.baseline) lines.push(`Baseline: **${report.baseline.new} new**, ${report.baseline.existing} existing, ${report.baseline.resolved} resolved. CI evaluates new findings.`, '');
   lines.push('## Findings', '', '| State | Level | Rule | Source | Finding |', '| --- | --- | --- | --- | --- |');
@@ -41,6 +42,7 @@ export function formatMarkdown(report: Report): string {
   for (const f of ordered.slice(0, 100)) lines.push(`| ${f.baselineState ?? '—'} | ${f.severity} | ${f.code} | ${markdown(f.file)}:${f.line}:${f.column} | ${markdown(f.message.slice(0, 1200))} |`);
   if (!report.findings.length) lines.push('| — | — | — | — | No findings in analyzed scope |');
   if (report.findings.length > 100) lines.push('', 'Showing the first 100 findings; retain the full JSON/HTML report as an artifact.');
+  if (options.explain) for (const item of ordered.slice(0, 100)) lines.push('', '<details><summary>' + escapeHtml(item.code + ' — ' + item.file + ':' + item.line) + '</summary>', '', '<pre>' + escapeHtml(formatFindingExplanation(item)) + '</pre>', '', '</details>');
   lines.push('', '## Tags', '', '| Kind | Tag | Source | Resolution |', '| --- | --- | --- | --- |');
   const sites = [...report.graph.producers.map(site => ({...site, kind:'producer'})), ...report.graph.invalidations.map(site => ({...site, kind:'invalidation'}))];
   for (const site of sites.slice(0, 100)) lines.push(`| ${site.kind} | ${markdown(site.tag.slice(0, 300))} | ${markdown(site.file)}:${site.line} | ${site.resolution} |`);
@@ -94,7 +96,7 @@ export function formatHtml(report: Report): string {
     + '<div class="code"><span class="rule mono">' + f.code + '</span><span class="sev">' + f.severity + (f.baselineState ? ' / ' + f.baselineState : '') + '</span></div>'
     + '<div class="body"><div class="loc mono">' + escapeHtml(f.file) + ':' + f.line + ':' + f.column + '</div>'
     + '<div class="msg">' + escapeHtml(f.message) + '</div>'
-    + '<details><summary>Guidance</summary><div class="help">' + escapeHtml(f.help) + '</div></details></div></article>').join('');
+    + '<details><summary>Why and how to resolve</summary><pre class="help" style="white-space:pre-wrap;overflow-wrap:anywhere">' + escapeHtml(formatFindingExplanation(f)) + '</pre></details></div></article>').join('');
   const stat = (value: number, label: string, kind: string) => '<div class="stat ' + (value ? kind : 'z') + '"><div class="n">' + value + '</div><div class="k">' + label + '</div></div>';
   return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
     + '<meta http-equiv="Content-Security-Policy" content="default-src ' + "'" + 'none' + "'" + '; style-src ' + "'" + 'unsafe-inline' + "'" + '; base-uri ' + "'" + 'none' + "'" + '; form-action ' + "'" + 'none' + "'" + '">'

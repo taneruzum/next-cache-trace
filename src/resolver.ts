@@ -4,6 +4,7 @@ import { propertyName, unwrap } from './config.js';
 import type { EvidenceStep } from './model.js';
 
 export interface ResolvedExpression { node?: ts.Expression; evidence: EvidenceStep[]; reason?: string }
+interface ResolvedBinding { declaration?: ts.VariableDeclaration; evidence: EvidenceStep[]; reason?: string }
 const canonical = (name: string) => name.replaceAll('\\', '/');
 
 /** A bounded source-only resolver. It never loads modules or evaluates application code. */
@@ -40,14 +41,12 @@ export class SourceContext {
     return { file: source.fileName, line: at.line + 1, column: at.character + 1, kind, expression: node.getText(source).slice(0, 240) };
   }
 
-  private imported(decl: ts.ImportSpecifier): { source: ts.SourceFile; name: string } | undefined {
-    const clause = decl.parent.parent;
-    const module = clause.parent.moduleSpecifier;
-    if (decl.isTypeOnly || clause.isTypeOnly || !ts.isStringLiteral(module)) return;
-    const key = decl.getSourceFile().fileName + '\0' + module.text;
+  private moduleSource(from: ts.Node, module: ts.Expression): ts.SourceFile | undefined {
+    if (!ts.isStringLiteral(module)) return;
+    const key = from.getSourceFile().fileName + '\0' + module.text;
     let source = this.moduleCache.get(key);
     if (source === undefined) {
-      const match = ts.resolveModuleName(module.text, resolve(this.root, decl.getSourceFile().fileName),
+      const match = ts.resolveModuleName(module.text, resolve(this.root, from.getSourceFile().fileName),
         { allowJs: true, moduleResolution: ts.ModuleResolutionKind.Bundler, ...this.moduleOptions }, {
           fileExists: file => this.sources.has(canonical(relative(this.root, file))),
           readFile: file => this.sources.get(canonical(relative(this.root, file)))?.text
@@ -55,31 +54,63 @@ export class SourceContext {
       source = match ? this.sources.get(canonical(relative(this.root, match.resolvedFileName))) : undefined;
       this.moduleCache.set(key, source ?? null);
     }
-    return source ? { source, name: (decl.propertyName ?? decl.name).text } : undefined;
+    return source ?? undefined;
   }
 
-  private exported(source: ts.SourceFile, name: string): ts.VariableDeclaration | undefined {
-    if (this.invalidFiles.has(source)) return;
-    // Re-exports and imported local export lists intentionally remain unsupported.
+  private imported(decl: ts.ImportSpecifier, seen = new Set<string>()): ResolvedBinding {
+    const clause = decl.parent.parent;
+    const evidence = [this.step(decl, 'import')];
+    if (decl.isTypeOnly || clause.isTypeOnly) return { evidence, reason: 'Type-only imports do not supply runtime tag values.' };
+    const source = this.moduleSource(decl, clause.parent.moduleSpecifier);
+    if (!source) return { evidence, reason: 'The imported module is outside the scanned sources or cannot be resolved.' };
+    const target = this.exported(source, (decl.propertyName ?? decl.name).text, seen);
+    return { ...target, evidence: [...evidence, ...target.evidence] };
+  }
+
+  private exported(source: ts.SourceFile, name: string, seen: Set<string>): ResolvedBinding {
+    const unknown = (reason: string): ResolvedBinding => ({ evidence: [], reason });
+    if (this.invalidFiles.has(source)) return unknown('The defining source has syntax errors.');
+    const key = source.fileName + '\0' + name;
+    if (seen.has(key) || seen.size >= 64) return unknown('Cyclic named export or export resolution depth limit (64).');
+    if (name === 'default') return unknown('Default exports are not resolved.');
+    seen.add(key);
+    const candidates: (ts.VariableDeclaration | ts.ExportSpecifier)[] = [];
     for (const statement of source.statements) {
       if (ts.isVariableStatement(statement) && statement.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
-        for (const decl of statement.declarationList.declarations) if (ts.isIdentifier(decl.name) && decl.name.text === name) return decl;
+        for (const decl of statement.declarationList.declarations) if (ts.isIdentifier(decl.name) && decl.name.text === name) candidates.push(decl);
       }
-      if (ts.isExportDeclaration(statement) && !statement.isTypeOnly && !statement.moduleSpecifier && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-        const item = statement.exportClause.elements.find(e => !e.isTypeOnly && e.name.text === name);
-        if (item) return this.checker.getExportSpecifierLocalTargetSymbol(item)?.declarations?.find(ts.isVariableDeclaration);
+      if (ts.isExportDeclaration(statement) && !statement.isTypeOnly && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+        candidates.push(...statement.exportClause.elements.filter(e => !e.isTypeOnly && e.name.text === name));
       }
     }
+    if (candidates.length !== 1) return unknown(candidates.length ? 'Multiple explicit exports share this name.' : 'No supported named export; export *, namespace and type-only exports are not resolved.');
+    const item = candidates[0];
+    const evidence = [this.step(item, 'export')];
+    if (ts.isVariableDeclaration(item)) return { declaration: item, evidence };
+    const statement = item.parent.parent;
+    if (statement.moduleSpecifier) {
+      const target = this.moduleSource(statement, statement.moduleSpecifier);
+      if (!target) return { evidence, reason: 'The re-exported module is outside the scanned sources or cannot be resolved.' };
+      const result = this.exported(target, (item.propertyName ?? item.name).text, seen);
+      return { ...result, evidence: [...evidence, ...result.evidence] };
+    }
+    const declarations = this.checker.getExportSpecifierLocalTargetSymbol(item)?.declarations;
+    if (declarations?.length !== 1) return { evidence, reason: 'The local export binding is missing or ambiguous.' };
+    const decl = declarations[0];
+    if (ts.isVariableDeclaration(decl)) return { declaration: decl, evidence };
+    if (ts.isImportSpecifier(decl)) {
+      const result = this.imported(decl, seen);
+      return { ...result, evidence: [...evidence, ...result.evidence] };
+    }
+    return { evidence, reason: 'Only named constant exports are supported.' };
   }
 
-  private declaration(id: ts.Identifier): ts.VariableDeclaration | undefined {
+  private binding(id: ts.Identifier): ResolvedBinding {
     const symbol = ts.isShorthandPropertyAssignment(id.parent) ? this.checker.getShorthandAssignmentValueSymbol(id.parent) : this.checker.getSymbolAtLocation(id);
     const decl = symbol?.declarations?.[0];
-    if (decl && ts.isVariableDeclaration(decl)) return decl;
-    if (decl && ts.isImportSpecifier(decl)) {
-      const target = this.imported(decl);
-      return target && this.exported(target.source, target.name);
-    }
+    if (decl && ts.isVariableDeclaration(decl)) return { declaration: decl, evidence: [] };
+    if (decl && ts.isImportSpecifier(decl)) return this.imported(decl);
+    return { evidence: [], reason: 'No supported local constant or named export in the scanned sources.' };
   }
 
   private origin(input: ts.Expression, seen = new Set<ts.Node>()): ts.VariableDeclaration | undefined {
@@ -90,7 +121,7 @@ export class SourceContext {
     if (!ts.isIdentifier(node)) return;
     const symbol = this.checker.getSymbolAtLocation(node);
     if (symbol && this.originCache.has(symbol)) return this.originCache.get(symbol) ?? undefined;
-    const decl = this.declaration(node);
+    const decl = this.binding(node).declaration;
     if (!decl) return;
     const init = decl.initializer && unwrap(decl.initializer);
     const target = init && (ts.isIdentifier(init) || ts.isPropertyAccessExpression(init) || ts.isElementAccessExpression(init)) ? this.origin(init, seen) : decl;
@@ -162,10 +193,9 @@ export class SourceContext {
     seen.add(node);
     if (this.invalidFiles.has(node.getSourceFile())) return unknown('The defining source has syntax errors.');
     if (ts.isIdentifier(node)) {
-      const symbol = this.checker.getSymbolAtLocation(node);
-      const imported = symbol?.declarations?.find(ts.isImportSpecifier);
-      const decl = this.declaration(node);
-      if (!decl?.initializer) return unknown('No supported local constant or direct named export in the scanned sources.');
+      const binding = this.binding(node);
+      const decl = binding.declaration;
+      if (!decl?.initializer) return { evidence: [...evidence, ...binding.evidence], reason: binding.reason ?? 'No supported constant initializer.' };
       if (!ts.isVariableDeclarationList(decl.parent) || !(decl.parent.flags & ts.NodeFlags.Const) || !ts.isIdentifier(decl.name)) return unknown('Only const declarations with simple names are supported.');
       const origin = this.origin(node) ?? decl;
       if (this.writes.has(origin)) return unknown('The constant or one of its aliases is written to.');
@@ -174,8 +204,7 @@ export class SourceContext {
         const scope = (n: ts.Node): ts.Node => { while (n.parent && !ts.isFunctionLike(n) && !ts.isSourceFile(n)) n = n.parent; return n; };
         if (scope(decl) === scope(node)) return unknown('Constant is read before its declaration.');
       }
-      const trail = [...evidence];
-      if (imported) trail.push(this.step(imported, 'import'), this.step(decl, 'export'));
+      const trail = [...evidence, ...binding.evidence];
       trail.push(this.step(decl.name, 'definition'));
       const resolved = this.resolve(decl.initializer, trail, seen);
       if (resolved.node && (ts.isObjectLiteralExpression(resolved.node) || ts.isArrayLiteralExpression(resolved.node)) && this.escapes.has(origin)) return unknown('The object/array escapes supported read-only uses; as const is not runtime immutability.');

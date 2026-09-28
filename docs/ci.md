@@ -12,4 +12,8 @@ The manual code-scanning workflow uploads the intentional-risk fixture so a main
     category: next-cache-trace
 ```
 
-Run a second audit with --fail-on error or warning if findings should block merging. --fail-on none still exits 2 for tool/configuration errors. For ordinary artifact uploads use upload-artifact instead; that does not create code-scanning annotations. Generated reports include paths and literal tag names, so choose the intended artifact visibility.
+Run a second audit with --fail-on error or warning if findings should block merging. --fail-on none still exits 2 for tool/configuration errors. For ordinary artifact uploads use upload-artifact instead; that does not create code-scanning annotations. Generated reports can include source excerpts, paths and literal tag names, so choose the intended artifact visibility.
+
+`doctor --format json` checks setup and scan scope. Exit 2 indicates a setup/scan error, while compatibility and coverage warnings alone exit 0. Doctor does not replace the audit gate. Use `audit --format markdown --explain` for a job summary with conditional guidance; retain a full artifact when the 100-finding summary limit is reached.
+
+Version 0.3.0 uses report schema 0.4. Review the new full report and regenerate existing schema 0.3 baselines deliberately. `init` never creates or accepts a baseline.

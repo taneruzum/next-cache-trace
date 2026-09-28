@@ -4,6 +4,7 @@ import { finding, type FileAnalysis, type Location, type Boundary, type TagSite 
 import { unwrap } from './config.js';
 import { SourceContext } from './resolver.js';
 import type { EvidenceStep } from './model.js';
+import { explainFinding } from './guidance.js';
 
 const DIRECTIVES = new Set(['use cache', 'use cache: remote', 'use cache: private']);
 export function analyzeSource(file: string, text: string): FileAnalysis {
@@ -144,7 +145,11 @@ export function analyzeFile(file: string, context: SourceContext): FileAnalysis 
       if (method === 'cacheTag') { addTags(node.arguments, method, node, scope, true); result.usages.push(location(node)); }
       if (method === 'revalidateTag' || method === 'updateTag') addTags(node.arguments.slice(0, 1), method, node, scope, false);
       if (method === 'revalidateTag') {
-        if (node.arguments.length === 1 && !ts.isSpreadElement(node.arguments[0])) result.findings.push(finding('NCT006', location(node), 'revalidateTag(tag) without a profile is deprecated in Next.js 16. Select an explicit invalidation policy; adding "max" changes immediate expiration to stale-while-revalidate.'));
+        if (node.arguments.length === 1 && !ts.isSpreadElement(node.arguments[0])) {
+          const item = finding('NCT006', location(node), 'revalidateTag(tag) without a profile is deprecated in Next.js 16. Select an explicit invalidation policy; adding "max" changes immediate expiration to stale-while-revalidate.');
+          item.explanation = explainFinding(item, source.text, serverAction ? 'server-action' : 'unknown');
+          result.findings.push(item);
+        }
         const profile = node.arguments[1] && unwrap(node.arguments[1]);
         if (serverAction && profile && (ts.isStringLiteral(profile) || ts.isNoSubstitutionTemplateLiteral(profile)) && profile.text === 'max') result.findings.push(finding('NCT009', location(node), 'Server Action ' + scope + ' uses revalidateTag(tag, "max"), which allows stale data while revalidating. If this action must immediately read its own write, consider updateTag; otherwise this usage is valid.'));
       }
